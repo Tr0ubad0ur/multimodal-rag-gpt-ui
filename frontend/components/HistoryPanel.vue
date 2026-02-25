@@ -17,38 +17,50 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900/60">
+  <BaseCard :aria-busy="loading ? 'true' : 'false'">
     <div class="flex items-center justify-between gap-2">
-      <h2 class="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ t('historyTitle') }}</h2>
-      <button
-        class="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+      <h2 class="text-sm font-semibold uppercase tracking-[0.16em] text-muted">{{ t('historyTitle') }}</h2>
+      <BaseButton
+        variant="secondary"
+        size="sm"
         :disabled="loading"
         @click="emit('refresh')"
       >
         {{ t('refresh') }}
-      </button>
+      </BaseButton>
     </div>
 
     <div class="mt-4 max-h-[26rem] space-y-2 overflow-y-auto pr-1">
-      <p v-if="!items.length" class="text-sm text-slate-500 dark:text-slate-400">{{ t('noHistory') }}</p>
+      <div v-if="loading && !items.length" class="space-y-2">
+        <article v-for="idx in 4" :key="idx" class="rounded-xl border border-line bg-surface p-3">
+          <BaseSkeleton :lines="2" />
+        </article>
+      </div>
+
+      <div v-else-if="!items.length" class="rounded-xl border border-line bg-surface-muted/60 p-4 text-sm text-muted">
+        <p>{{ t('noHistory') }}</p>
+        <p class="mt-1 text-xs">{{ t('historyEmptyHint') }}</p>
+      </div>
 
       <article
         v-for="item in items"
         :key="item.id"
-        class="rounded-xl border p-3 transition"
-        :class="item.id === activeId ? 'border-cyan-400 bg-cyan-50/80 dark:border-cyan-500/60 dark:bg-cyan-900/20' : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900/40 dark:hover:border-slate-600'"
+        class="ui-fade-up rounded-xl border p-3 transition"
+        :class="item.id === activeId ? 'border-brand/50 bg-brand-soft/70' : 'border-line bg-surface hover:border-line/80 hover:bg-surface-muted/70'"
       >
         <button class="w-full text-left" @click="emit('select', item)">
-          <p class="line-clamp-2 text-sm font-medium text-slate-900 dark:text-slate-100">{{ item.query }}</p>
-          <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ new Date(item.created_at).toLocaleString() }}</p>
+          <p class="line-clamp-2 text-sm font-medium text-foreground">{{ item.query }}</p>
+          <p class="mt-1 text-xs text-muted">{{ new Date(item.created_at).toLocaleString() }}</p>
         </button>
-        <button
-          class="mt-2 rounded-md px-2 py-1 text-xs text-rose-700 transition hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-900/30"
+        <BaseButton
+          variant="danger"
+          size="sm"
+          class="mt-2"
           @click="emit('remove', item.id)"
         >
           {{ t('delete') }}
-        </button>
+        </BaseButton>
       </article>
     </div>
-  </section>
+  </BaseCard>
 </template>

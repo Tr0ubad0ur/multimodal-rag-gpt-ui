@@ -18,26 +18,28 @@ const toggleLocale = () => {
 </script>
 
 <template>
-  <header class="border-b border-slate-200/80 bg-white/75 backdrop-blur-md dark:border-slate-700/70 dark:bg-slate-900/60">
-    <div class="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
+  <header class="border-b border-line/80 bg-surface/80 backdrop-blur-md">
+    <div class="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6 lg:px-8">
       <div>
-        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700 dark:text-cyan-300">{{ t('headerTag') }}</p>
-        <h1 class="text-xl font-bold tracking-tight text-slate-900 dark:text-white">{{ t('headerTitle') }}</h1>
+        <p class="text-xs font-semibold uppercase tracking-[0.18em] text-brand">{{ t('headerTag') }}</p>
+        <h1 class="text-xl font-bold tracking-tight text-foreground">{{ t('headerTitle') }}</h1>
       </div>
       <div class="flex items-center gap-2">
         <button
-          class="rounded-full border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          class="ui-btn-secondary rounded-full px-3 py-1 text-xs"
+          :aria-label="`${locale.toUpperCase()}`"
           @click="toggleLocale"
         >
-          {{ t('langLabel') }}: {{ locale.toUpperCase() }}
+          {{ locale.toUpperCase() }}
         </button>
         <button
-          class="rounded-full border border-slate-300 px-3 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+          class="ui-btn-secondary rounded-full px-3 py-1 text-xs"
+          :aria-label="`${colorMode.preference}`"
           @click="toggleTheme"
         >
-          {{ t('themeLabel') }}: {{ colorMode.preference }}
+          {{ colorMode.preference }}
         </button>
-        <span class="rounded-full bg-slate-900 px-3 py-1 text-xs font-medium text-white dark:bg-slate-100 dark:text-slate-900">
+        <span class="rounded-full border border-brand/30 bg-brand-soft px-3 py-1 text-xs font-medium text-brand-strong">
           Nuxt 4 / Vue 3
         </span>
       </div>

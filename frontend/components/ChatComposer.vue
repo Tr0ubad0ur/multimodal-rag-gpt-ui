@@ -36,13 +36,14 @@ const submit = () => {
 </script>
 
 <template>
-  <form class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/60" @submit.prevent="submit">
-    <label class="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ t('questionLabel') }}</label>
+  <form class="ui-card p-4" :aria-busy="busy ? 'true' : 'false'" @submit.prevent="submit">
+    <label class="mb-2 block text-xs font-semibold uppercase tracking-[0.16em] text-muted">{{ t('questionLabel') }}</label>
     <textarea
       v-model="query"
       rows="4"
       :placeholder="t('questionPlaceholder')"
-      class="w-full resize-none rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none ring-cyan-500 transition focus:ring dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+      class="ui-input resize-none"
+      :aria-label="t('questionLabel')"
     />
 
     <div class="mt-3 grid gap-3 sm:grid-cols-[1fr_auto]">
@@ -50,17 +51,18 @@ const submit = () => {
         v-model="image"
         type="url"
         :placeholder="t('imagePlaceholder')"
-        class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none ring-cyan-500 transition focus:ring dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+        class="ui-input"
+        :aria-label="t('imagePlaceholder')"
       >
-      <label class="inline-flex items-center gap-2 rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-200">
+      <label class="inline-flex items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2 text-sm text-foreground">
         top_k
-        <input v-model.number="topK" type="number" min="1" max="50" class="w-16 bg-transparent outline-none">
+        <input v-model.number="topK" type="number" min="1" max="50" class="w-16 bg-transparent text-right outline-none" aria-label="top_k">
       </label>
     </div>
 
     <button
       type="submit"
-      class="mt-3 w-full rounded-xl bg-cyan-700 px-3 py-2 text-sm font-semibold text-white transition hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-cyan-500 dark:hover:bg-cyan-400"
+      class="ui-btn-primary mt-3 w-full"
       :disabled="busy"
     >
       {{ busy ? t('processing') : t('sendQuery') }}

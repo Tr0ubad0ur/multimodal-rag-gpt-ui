@@ -8,6 +8,14 @@ interface Message {
   docs?: RetrievedDoc[]
 }
 
+interface AskPayload {
+  query: string
+  top_k: number
+  image?: string
+}
+
+type RetryAction = 'ask' | 'history' | 'signin' | 'signup' | 'delete' | null
+
 const {
   signIn,
   signUp,
@@ -21,7 +29,6 @@ const {
 } = useApi()
 
 const { user, session, isAuthenticated, hydrate, setAuth, clearAuth } = useAuth()
-const config = useRuntimeConfig()
 const { t } = useI18n()
 
 const nextMessageId = () =>
@@ -31,19 +38,37 @@ const messages = ref<Message[]>([
   {
     id: nextMessageId(),
     role: 'assistant',
-    content:
-      'Готов к мультимодальному RAG-поиску. Введи вопрос, при необходимости добавь URL изображения и получи ответ с найденными фрагментами.',
+    content: t('welcomeMessage'),
   },
 ])
 const history = ref<HistoryItem[]>([])
 const selectedHistoryId = ref<number | null>(null)
 
+const chatScrollEl = ref<HTMLElement | null>(null)
 const chatBusy = ref(false)
 const authBusy = ref(false)
 const historyBusy = ref(false)
 const errorText = ref('')
+const retryAction = ref<RetryAction>(null)
+const lastAskPayload = ref<AskPayload | null>(null)
+const lastDeleteId = ref<number | null>(null)
+const lastAuthPayload = ref<{ mode: 'signin' | 'signup'; payload: { email: string; password: string } } | null>(null)
 
 const userEmail = computed(() => user.value?.email ?? '')
+const hasUserMessages = computed(() => messages.value.some((message) => message.role === 'user'))
+const canRetry = computed(() => retryAction.value !== null)
+
+const clearError = () => {
+  errorText.value = ''
+  retryAction.value = null
+}
+
+const scrollMessagesToBottom = async () => {
+  await nextTick()
+  if (chatScrollEl.value) {
+    chatScrollEl.value.scrollTop = chatScrollEl.value.scrollHeight
+  }
+}
 
 const pushAssistantMessage = (response: QueryResponse) => {
   messages.value.push({
@@ -81,24 +106,23 @@ const loadHistory = async () => {
     history.value = result.data ?? []
   } catch (error) {
     errorText.value = `${t('historyError')}: ${parseError(error)}`
+    retryAction.value = 'history'
   } finally {
     historyBusy.value = false
   }
 }
 
-const handleAsk = async (payload: {
-  query: string
-  top_k: number
-  image?: string
-}) => {
+const handleAsk = async (payload: AskPayload) => {
   chatBusy.value = true
-  errorText.value = ''
+  clearError()
+  lastAskPayload.value = payload
 
   messages.value.push({
     id: nextMessageId(),
     role: 'user',
     content: payload.query,
   })
+  await scrollMessagesToBottom()
 
   try {
     const response = isAuthenticated.value
@@ -106,17 +130,20 @@ const handleAsk = async (payload: {
       : await askPublic(payload)
 
     pushAssistantMessage(response)
+    await scrollMessagesToBottom()
 
     if (isAuthenticated.value) {
       await loadHistory()
     }
   } catch (error) {
     errorText.value = `${t('errorPrefix')}: ${parseError(error)}`
+    retryAction.value = 'ask'
     messages.value.push({
       id: nextMessageId(),
       role: 'assistant',
       content: errorText.value,
     })
+    await scrollMessagesToBottom()
   } finally {
     chatBusy.value = false
   }
@@ -124,7 +151,8 @@ const handleAsk = async (payload: {
 
 const handleSignIn = async (payload: { email: string; password: string }) => {
   authBusy.value = true
-  errorText.value = ''
+  clearError()
+  lastAuthPayload.value = { mode: 'signin', payload }
   try {
     const result = await signIn(payload)
     if (!result.session || !result.user) {
@@ -135,6 +163,7 @@ const handleSignIn = async (payload: { email: string; password: string }) => {
     await loadHistory()
   } catch (error) {
     errorText.value = `${t('signInError')}: ${parseError(error)}`
+    retryAction.value = 'signin'
   } finally {
     authBusy.value = false
   }
@@ -142,7 +171,8 @@ const handleSignIn = async (payload: { email: string; password: string }) => {
 
 const handleSignUp = async (payload: { email: string; password: string }) => {
   authBusy.value = true
-  errorText.value = ''
+  clearError()
+  lastAuthPayload.value = { mode: 'signup', payload }
   try {
     const result = await signUp(payload)
     if (result.session && result.user) {
@@ -152,8 +182,10 @@ const handleSignUp = async (payload: { email: string; password: string }) => {
     }
 
     errorText.value = t('signUpDone')
+    retryAction.value = null
   } catch (error) {
     errorText.value = `${t('signUpError')}: ${parseError(error)}`
+    retryAction.value = 'signup'
   } finally {
     authBusy.value = false
   }
@@ -161,7 +193,7 @@ const handleSignUp = async (payload: { email: string; password: string }) => {
 
 const handleLogout = async () => {
   authBusy.value = true
-  errorText.value = ''
+  clearError()
   try {
     if (isAuthenticated.value) {
       await logout()
@@ -177,7 +209,8 @@ const handleLogout = async () => {
 
 const handleDeleteHistory = async (id: number) => {
   historyBusy.value = true
-  errorText.value = ''
+  clearError()
+  lastDeleteId.value = id
   try {
     await deleteHistory(id)
     history.value = history.value.filter((item) => item.id !== id)
@@ -186,6 +219,7 @@ const handleDeleteHistory = async (id: number) => {
     }
   } catch (error) {
     errorText.value = `${t('deleteError')}: ${parseError(error)}`
+    retryAction.value = 'delete'
   } finally {
     historyBusy.value = false
   }
@@ -206,6 +240,37 @@ const selectHistory = (item: HistoryItem) => {
       docs: item.retrieved_docs ?? undefined,
     }
   )
+  void scrollMessagesToBottom()
+}
+
+const retryLastAction = async () => {
+  switch (retryAction.value) {
+    case 'ask':
+      if (lastAskPayload.value) {
+        await handleAsk(lastAskPayload.value)
+      }
+      break
+    case 'history':
+      await loadHistory()
+      break
+    case 'signin':
+      if (lastAuthPayload.value?.mode === 'signin') {
+        await handleSignIn(lastAuthPayload.value.payload)
+      }
+      break
+    case 'signup':
+      if (lastAuthPayload.value?.mode === 'signup') {
+        await handleSignUp(lastAuthPayload.value.payload)
+      }
+      break
+    case 'delete':
+      if (typeof lastDeleteId.value === 'number') {
+        await handleDeleteHistory(lastDeleteId.value)
+      }
+      break
+    default:
+      break
+  }
 }
 
 onMounted(async () => {
@@ -230,12 +295,14 @@ onMounted(async () => {
     clearAuth()
     history.value = []
   }
+
+  await scrollMessagesToBottom()
 })
 </script>
 
 <template>
-  <div class="grid gap-6 lg:grid-cols-[19rem_1fr_19rem]">
-    <aside class="order-2 lg:order-1">
+  <div class="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)_18rem]">
+    <aside class="order-2 lg:order-1 lg:sticky lg:top-6 lg:self-start">
       <HistoryPanel
         :items="history"
         :loading="historyBusy"
@@ -248,26 +315,52 @@ onMounted(async () => {
 
     <section class="order-1 min-w-0 lg:order-2">
       <div class="space-y-4">
+        <BaseCard :padded="false" class="overflow-hidden">
+          <div class="border-b border-line bg-surface-muted/60 px-4 py-3 text-xs font-semibold uppercase tracking-[0.16em] text-muted">
+            {{ t('chatTitle') }}
+          </div>
+          <div ref="chatScrollEl" class="max-h-[58vh] space-y-3 overflow-y-auto p-4">
+            <div v-if="!hasUserMessages" class="rounded-xl border border-line bg-surface-muted/60 p-4 text-sm text-muted">
+              <p class="font-medium text-foreground">{{ t('chatEmptyTitle') }}</p>
+              <p class="mt-1">{{ t('chatEmptyHint') }}</p>
+            </div>
 
-        <div class="space-y-3">
-          <ChatMessage
-            v-for="message in messages"
-            :key="message.id"
-            :role="message.role"
-            :content="message.content"
-            :docs="message.docs"
-          />
+            <ChatMessage
+              v-for="message in messages"
+              :key="message.id"
+              :role="message.role"
+              :content="message.content"
+              :docs="message.docs"
+            />
+
+            <article v-if="chatBusy" class="mr-auto max-w-4xl rounded-2xl border border-line bg-surface p-4 shadow-sm ui-pulse">
+              <p class="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-muted">{{ t('assistant') }}</p>
+              <BaseSkeleton :lines="2" />
+            </article>
+          </div>
+        </BaseCard>
+
+        <div>
+          <ChatComposer :busy="chatBusy" @send="handleAsk" />
         </div>
 
-        <ChatComposer :busy="chatBusy" @send="handleAsk" />
-
-        <p v-if="errorText" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-          {{ errorText }}
-        </p>
+        <BaseAlert v-if="errorText" tone="danger" role="alert" aria-live="polite">
+          <div class="flex items-start justify-between gap-3">
+            <p class="leading-relaxed">{{ errorText }}</p>
+            <BaseButton
+              v-if="canRetry"
+              variant="danger"
+              size="sm"
+              @click="retryLastAction"
+            >
+              {{ t('retry') }}
+            </BaseButton>
+          </div>
+        </BaseAlert>
       </div>
     </section>
 
-    <aside class="order-3">
+    <aside class="order-3 lg:sticky lg:top-6 lg:self-start">
       <AuthPanel
         :busy="authBusy"
         :authenticated="isAuthenticated"

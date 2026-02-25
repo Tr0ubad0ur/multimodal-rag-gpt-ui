@@ -3,9 +3,114 @@
 @tailwind utilities;
 
 :root {
-  font-family: Manrope, "Segoe UI", sans-serif;
+  --color-canvas: 244 247 251;
+  --color-surface: 255 255 255;
+  --color-surface-muted: 248 250 252;
+  --color-line: 203 213 225;
+  --color-foreground: 15 23 42;
+  --color-muted: 71 85 105;
+  --color-brand: 14 116 144;
+  --color-brand-strong: 8 92 113;
+  --color-brand-soft: 236 254 255;
+  --color-danger: 190 24 93;
+  --color-danger-soft: 255 241 242;
 }
 
-body {
-  @apply antialiased;
+.dark {
+  --color-canvas: 3 7 18;
+  --color-surface: 15 23 42;
+  --color-surface-muted: 30 41 59;
+  --color-line: 51 65 85;
+  --color-foreground: 226 232 240;
+  --color-muted: 148 163 184;
+  --color-brand: 34 211 238;
+  --color-brand-strong: 103 232 249;
+  --color-brand-soft: 8 47 73;
+  --color-danger: 251 113 133;
+  --color-danger-soft: 76 5 25;
+}
+
+@layer base {
+  html {
+    font-family: Manrope, "Segoe UI", sans-serif;
+  }
+
+  body {
+    @apply bg-canvas text-foreground antialiased;
+  }
+
+  *:focus-visible {
+    @apply outline-none ring-2 ring-brand/45 ring-offset-2 ring-offset-canvas;
+  }
+}
+
+@layer components {
+  .ui-card {
+    @apply rounded-2xl border border-line bg-surface shadow-card;
+  }
+
+  .ui-input {
+    @apply w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm text-foreground outline-none transition placeholder:text-muted focus:border-brand focus:ring-2 focus:ring-brand/35;
+  }
+
+  .ui-btn-primary {
+    @apply inline-flex items-center justify-center rounded-xl bg-brand px-3 py-2 text-sm font-semibold text-white transition hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .ui-btn-secondary {
+    @apply inline-flex items-center justify-center rounded-xl border border-line bg-surface px-3 py-2 text-sm font-medium text-foreground transition hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .ui-btn-danger {
+    @apply inline-flex items-center justify-center rounded-xl border border-danger/30 bg-danger-soft px-3 py-2 text-sm font-medium text-danger transition hover:border-danger/50 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .ui-fade-up {
+    animation: ui-fade-up 180ms ease-out both;
+  }
+
+  .ui-pulse {
+    animation: ui-pulse 1.6s ease-in-out infinite;
+  }
+
+  .ui-skeleton {
+    @apply rounded-xl bg-surface-muted/80;
+    background-image: linear-gradient(
+      90deg,
+      rgb(var(--color-surface-muted) / 0.7) 0%,
+      rgb(var(--color-surface) / 0.95) 50%,
+      rgb(var(--color-surface-muted) / 0.7) 100%
+    );
+    background-size: 220% 100%;
+    animation: ui-shimmer 1.4s linear infinite;
+  }
+}
+
+@keyframes ui-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ui-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes ui-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
