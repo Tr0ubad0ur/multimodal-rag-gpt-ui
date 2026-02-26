@@ -1,9 +1,13 @@
 import type {
   AuthResponse,
   AuthUser,
+  EmbeddingResponse,
   HistoryResponse,
+  ImageEmbeddingRequest,
   QueryRequest,
   QueryResponse,
+  TextEmbeddingRequest,
+  VideoEmbeddingRequest,
 } from '~/types/api'
 
 interface Credentials {
@@ -78,6 +82,24 @@ export const useApi = () => {
       auth: true,
     })
 
+  const embedText = (payload: TextEmbeddingRequest) =>
+    apiFetch<EmbeddingResponse>('/embed/text', {
+      method: 'POST',
+      body: payload,
+    })
+
+  const embedImage = (payload: ImageEmbeddingRequest) =>
+    apiFetch<EmbeddingResponse>('/embed/image', {
+      method: 'POST',
+      body: payload,
+    })
+
+  const embedVideo = (payload: VideoEmbeddingRequest) =>
+    apiFetch<EmbeddingResponse>('/embed/video', {
+      method: 'POST',
+      body: payload,
+    })
+
   return {
     signUp,
     signIn,
@@ -88,5 +110,8 @@ export const useApi = () => {
     askAuth,
     getHistory,
     deleteHistory,
+    embedText,
+    embedImage,
+    embedVideo,
   }
 }

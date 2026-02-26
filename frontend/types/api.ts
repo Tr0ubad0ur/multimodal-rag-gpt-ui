@@ -4,6 +4,30 @@ export interface QueryRequest {
   image?: string | null
 }
 
+export interface TextEmbeddingRequest {
+  text: string
+  provider?: string
+}
+
+export interface ImageEmbeddingRequest {
+  image_path: string
+  provider?: string
+}
+
+export interface VideoEmbeddingRequest {
+  video_path: string
+  sample_fps?: number
+  provider?: string
+}
+
+export interface EmbeddingResponse {
+  provider: string
+  modality: 'text' | 'image' | 'video'
+  dimension: number
+  embedding: number[]
+  sample_fps?: number
+}
+
 export interface RetrievedDoc {
   id?: string | number
   score?: number

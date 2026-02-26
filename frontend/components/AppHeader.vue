@@ -1,6 +1,10 @@
 <script setup lang="ts">
 const { t, locale, setLocale } = useI18n()
 const colorMode = useColorMode()
+const { isAuthenticated } = useAuth()
+const isAuthModalOpen = useState<boolean>('auth-modal-open', () => false)
+
+const authButtonLabel = computed(() => (isAuthenticated.value ? t('authTitle') : t('signIn')))
 
 const nextMode = () => {
   const order = ['system', 'light', 'dark'] as const
@@ -14,6 +18,10 @@ const toggleTheme = () => {
 
 const toggleLocale = () => {
   setLocale(locale.value === 'ru' ? 'en' : 'ru')
+}
+
+const openAuthModal = () => {
+  isAuthModalOpen.value = true
 }
 </script>
 
@@ -39,9 +47,9 @@ const toggleLocale = () => {
         >
           {{ colorMode.preference }}
         </button>
-        <span class="rounded-full border border-brand/30 bg-brand-soft px-3 py-1 text-xs font-medium text-brand-strong">
-          Nuxt 4 / Vue 3
-        </span>
+        <button class="ui-btn-secondary rounded-full px-3 py-1 text-xs" @click="openAuthModal">
+          {{ authButtonLabel }}
+        </button>
       </div>
     </div>
   </header>

@@ -43,6 +43,7 @@ const messages = ref<Message[]>([
 ])
 const history = ref<HistoryItem[]>([])
 const selectedHistoryId = ref<number | null>(null)
+const isAuthModalOpen = useState<boolean>('auth-modal-open', () => false)
 
 const chatScrollEl = ref<HTMLElement | null>(null)
 const chatBusy = ref(false)
@@ -161,6 +162,7 @@ const handleSignIn = async (payload: { email: string; password: string }) => {
 
     setAuth(result.session, result.user)
     await loadHistory()
+    isAuthModalOpen.value = false
   } catch (error) {
     errorText.value = `${t('signInError')}: ${parseError(error)}`
     retryAction.value = 'signin'
@@ -178,6 +180,7 @@ const handleSignUp = async (payload: { email: string; password: string }) => {
     if (result.session && result.user) {
       setAuth(result.session, result.user)
       await loadHistory()
+      isAuthModalOpen.value = false
       return
     }
 
@@ -273,7 +276,24 @@ const retryLastAction = async () => {
   }
 }
 
+const closeAuthModal = () => {
+  isAuthModalOpen.value = false
+}
+
+const onAuthOverlayClick = (event: MouseEvent) => {
+  if (event.target === event.currentTarget) {
+    closeAuthModal()
+  }
+}
+
+const onEscape = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && isAuthModalOpen.value) {
+    closeAuthModal()
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener('keydown', onEscape)
   hydrate()
 
   if (!session.value) {
@@ -298,12 +318,17 @@ onMounted(async () => {
 
   await scrollMessagesToBottom()
 })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onEscape)
+})
 </script>
 
 <template>
-  <div class="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)_18rem]">
-    <aside class="order-2 lg:order-1 lg:sticky lg:top-6 lg:self-start">
+  <div class="grid min-h-[calc(100vh-8rem)] gap-6 lg:grid-cols-[18rem_minmax(0,1fr)_20rem]">
+    <aside class="order-2 lg:order-1 lg:sticky lg:top-6 lg:flex lg:h-[calc(100vh-6rem)]">
       <HistoryPanel
+        class="w-full"
         :items="history"
         :loading="historyBusy"
         :active-id="selectedHistoryId"
@@ -361,6 +386,16 @@ onMounted(async () => {
     </section>
 
     <aside class="order-3 lg:sticky lg:top-6 lg:self-start">
+      <KnowledgeBasePanel />
+    </aside>
+  </div>
+
+  <div
+    v-if="isAuthModalOpen"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]"
+    @click="onAuthOverlayClick"
+  >
+    <div class="w-full max-w-md">
       <AuthPanel
         :busy="authBusy"
         :authenticated="isAuthenticated"
@@ -369,6 +404,9 @@ onMounted(async () => {
         @signup="handleSignUp"
         @logout="handleLogout"
       />
-    </aside>
+      <BaseButton block class="mt-3" variant="secondary" @click="closeAuthModal">
+        {{ t('close') }}
+      </BaseButton>
+    </div>
   </div>
 </template>

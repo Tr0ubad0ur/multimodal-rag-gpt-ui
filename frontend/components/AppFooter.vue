@@ -12,15 +12,20 @@ const { t } = useI18n()
           {{ t('projectDesc') }}
         </p>
       </div>
-      <div class="rounded-full border border-brand/30 bg-brand-soft px-3 py-1 text-xs font-medium text-brand-strong">
-        <a
-          :href="config.public.apiBase"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="hover:underline focus-visible:ring-0"
-        >
-          {{ t('apiLabel') }}: {{ config.public.apiBase }}
-        </a>
+      <div class="flex items-center gap-2">
+        <div class="rounded-full border border-brand/30 bg-brand-soft px-3 py-1 text-xs font-medium text-brand-strong">
+          <a
+            :href="config.public.apiBase"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="hover:underline focus-visible:ring-0"
+          >
+            {{ t('apiLabel') }}: {{ config.public.apiBase }}
+          </a>
+        </div>
+        <span class="rounded-full border border-brand/30 bg-brand-soft px-3 py-1 text-xs font-medium text-brand-strong">
+          Nuxt 4 / Vue 3
+        </span>
       </div>
     </div>
   </footer>

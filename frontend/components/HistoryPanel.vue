@@ -17,7 +17,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <BaseCard :aria-busy="loading ? 'true' : 'false'">
+  <BaseCard :aria-busy="loading ? 'true' : 'false'" class="flex h-full min-h-0 flex-col">
     <div class="flex items-center justify-between gap-2">
       <h2 class="text-sm font-semibold uppercase tracking-[0.16em] text-muted">{{ t('historyTitle') }}</h2>
       <BaseButton
@@ -30,7 +30,7 @@ const emit = defineEmits<{
       </BaseButton>
     </div>
 
-    <div class="mt-4 max-h-[26rem] space-y-2 overflow-y-auto pr-1">
+    <div class="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
       <div v-if="loading && !items.length" class="space-y-2">
         <article v-for="idx in 4" :key="idx" class="rounded-xl border border-line bg-surface p-3">
           <BaseSkeleton :lines="2" />
