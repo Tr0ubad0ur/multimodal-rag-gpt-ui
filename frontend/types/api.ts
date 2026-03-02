@@ -1,7 +1,12 @@
 export interface QueryRequest {
   query: string
   top_k?: number
+  model?: string
   image?: string | null
+  attachment_id?: string | null
+  attachment?: File | null
+  folder_ids?: string[]
+  file_ids?: string[]
 }
 
 export interface TextEmbeddingRequest {
@@ -75,4 +80,28 @@ export interface HistoryItem {
 
 export interface HistoryResponse {
   data: HistoryItem[]
+}
+
+export interface FileUploadResponse {
+  file_id: string
+  filename: string
+  mime: string
+  size: number
+  storage_path: string
+}
+
+export interface KbFolder {
+  id: string
+  name: string
+  parent_id: string | null
+  created_at?: string
+}
+
+export interface KbFile {
+  file_id: string
+  folder_id: string | null
+  filename: string
+  mime?: string
+  size?: number
+  created_at?: string
 }

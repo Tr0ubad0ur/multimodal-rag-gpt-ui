@@ -4,32 +4,65 @@ const { t } = useI18n()
 interface AskPayload {
   query: string
   top_k: number
+  model: string
+  attachment_id?: string
+  attachment?: File
 }
 
-defineProps<{
+interface ModelOption {
+  value: string
+  label: string
+}
+
+const props = defineProps<{
   busy?: boolean
+  uploadingAttachment?: boolean
+  uploadedAttachmentId?: string | null
+  uploadedAttachmentName?: string | null
+  modelOptions?: ModelOption[]
+  filterMode?: 'none' | 'folders' | 'files'
+  filterControlsDisabled?: boolean
+  selectedFolderCount?: number
+  selectedFileCount?: number
 }>()
 
 const emit = defineEmits<{
   send: [payload: AskPayload]
+  uploadAttachment: [file: File]
+  clearUploadedAttachment: []
+  filterModeChange: [mode: 'none' | 'folders' | 'files']
 }>()
 
 const query = ref('')
 const modelMenuOpen = ref(false)
 const selectedModel = ref('gpt-default')
-const selectedFileName = ref('')
+const directAttachment = ref<File | null>(null)
 const isDragOver = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-const modelOptions = [
+const fallbackModelOptions: ModelOption[] = [
   { value: 'gpt-default', label: 'GPT Default' },
   { value: 'fast-lite', label: 'Fast Lite' },
   { value: 'deep-reason', label: 'Deep Reason' },
 ]
 
-const selectedModelLabel = computed(() => {
-  return modelOptions.find((option) => option.value === selectedModel.value)?.label ?? 'GPT Default'
+const modelOptions = computed(() => {
+  return props.modelOptions?.length ? props.modelOptions : fallbackModelOptions
 })
+
+const selectedModelLabel = computed(() => {
+  return modelOptions.value.find((option) => option.value === selectedModel.value)?.label ?? 'GPT Default'
+})
+
+watch(
+  modelOptions,
+  (options) => {
+    if (!options.some((option) => option.value === selectedModel.value)) {
+      selectedModel.value = options[0]?.value ?? 'gpt-default'
+    }
+  },
+  { immediate: true }
+)
 
 const submit = () => {
   const trimmed = query.value.trim()
@@ -37,12 +70,24 @@ const submit = () => {
     return
   }
 
-  emit('send', {
+  const payload: AskPayload = {
     query: trimmed,
-    top_k: 5,
+    top_k: 8,
+    model: selectedModel.value,
+  }
+
+  if (directAttachment.value) {
+    payload.attachment = directAttachment.value
+  } else if (props.uploadedAttachmentId) {
+    payload.attachment_id = props.uploadedAttachmentId
+  }
+
+  emit('send', {
+    ...payload,
   })
 
   query.value = ''
+  directAttachment.value = null
 }
 
 const toggleModelMenu = () => {
@@ -61,7 +106,10 @@ const openFilePicker = () => {
 const onFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
-  selectedFileName.value = file?.name ?? ''
+  if (file) {
+    directAttachment.value = null
+    emit('uploadAttachment', file)
+  }
   target.value = ''
 }
 
@@ -78,12 +126,32 @@ const onDrop = (event: DragEvent) => {
   event.preventDefault()
   isDragOver.value = false
   const file = event.dataTransfer?.files?.[0]
-  selectedFileName.value = file?.name ?? ''
+  if (!file) {
+    return
+  }
+  emit('clearUploadedAttachment')
+  directAttachment.value = file
 }
 
 const clearSelectedFile = () => {
-  selectedFileName.value = ''
+  if (directAttachment.value) {
+    directAttachment.value = null
+    return
+  }
+  emit('clearUploadedAttachment')
 }
+
+const selectedFileName = computed(() => {
+  if (directAttachment.value) {
+    return directAttachment.value.name
+  }
+  return props.uploadedAttachmentName ?? ''
+})
+
+const isUploading = computed(() => Boolean(props.uploadingAttachment))
+const currentFilterMode = computed(() => props.filterMode ?? 'none')
+const selectedFolderCount = computed(() => props.selectedFolderCount ?? 0)
+const selectedFileCount = computed(() => props.selectedFileCount ?? 0)
 </script>
 
 <template>
@@ -96,6 +164,35 @@ const clearSelectedFile = () => {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
+    <div class="mb-2 flex flex-wrap gap-2">
+      <BaseButton
+        size="sm"
+        :variant="currentFilterMode === 'none' ? 'primary' : 'secondary'"
+        @click="emit('filterModeChange', 'none')"
+      >
+        Без фильтра
+      </BaseButton>
+      <BaseButton
+        size="sm"
+        :variant="currentFilterMode === 'folders' ? 'primary' : 'secondary'"
+        :disabled="filterControlsDisabled"
+        @click="emit('filterModeChange', 'folders')"
+      >
+        По папкам
+      </BaseButton>
+      <BaseButton
+        size="sm"
+        :variant="currentFilterMode === 'files' ? 'primary' : 'secondary'"
+        :disabled="filterControlsDisabled"
+        @click="emit('filterModeChange', 'files')"
+      >
+        По файлам
+      </BaseButton>
+    </div>
+    <p class="mb-2 text-xs text-muted">
+      {{ t('selectedFilters', { folders: selectedFolderCount, files: selectedFileCount }) }}
+    </p>
+
     <div class="flex items-center gap-2">
       <input
         v-model="query"
@@ -107,7 +204,7 @@ const clearSelectedFile = () => {
       <button
         type="submit"
         class="ui-btn-primary shrink-0"
-        :disabled="busy"
+        :disabled="busy || isUploading"
       >
         {{ busy ? t('processing') : t('sendQuery') }}
       </button>
@@ -150,6 +247,7 @@ const clearSelectedFile = () => {
         class="ui-btn-secondary h-9 w-9 !px-0"
         :title="t('composerAttach')"
         :aria-label="t('composerAttach')"
+        :disabled="isUploading"
         @click="openFilePicker"
       >
         <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -167,6 +265,7 @@ const clearSelectedFile = () => {
       <div class="flex min-w-0 items-center gap-1 text-xs text-muted">
         <p class="truncate">
           {{ selectedModelLabel }}<span v-if="selectedFileName"> · {{ selectedFileName }}</span><span v-else> · {{ t('composerDropHint') }}</span>
+          <span v-if="isUploading"> · {{ t('processing') }}</span>
         </p>
         <button
           v-if="selectedFileName"

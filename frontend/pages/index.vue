@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { HistoryItem, QueryResponse, RetrievedDoc } from '~/types/api'
+import type { HistoryItem, QueryRequest, QueryResponse, RetrievedDoc } from '~/types/api'
 
 interface Message {
   id: string
@@ -11,7 +11,9 @@ interface Message {
 interface AskPayload {
   query: string
   top_k: number
-  image?: string
+  model: string
+  attachment_id?: string
+  attachment?: File
 }
 
 type RetryAction = 'ask' | 'history' | 'signin' | 'signup' | 'delete' | null
@@ -22,6 +24,8 @@ const {
   logout,
   askPublic,
   askAuth,
+  uploadFile,
+  getModels,
   getHistory,
   deleteHistory,
   me,
@@ -49,11 +53,21 @@ const chatScrollEl = ref<HTMLElement | null>(null)
 const chatBusy = ref(false)
 const authBusy = ref(false)
 const historyBusy = ref(false)
+const attachmentUploadBusy = ref(false)
 const errorText = ref('')
 const retryAction = ref<RetryAction>(null)
 const lastAskPayload = ref<AskPayload | null>(null)
 const lastDeleteId = ref<number | null>(null)
 const lastAuthPayload = ref<{ mode: 'signin' | 'signup'; payload: { email: string; password: string } } | null>(null)
+const uploadedAttachment = ref<{ id: string; name: string } | null>(null)
+const chatFilters = ref<{ mode: 'none' | 'folders' | 'files'; folderIds: string[]; fileIds: string[] }>({
+  mode: 'none',
+  folderIds: [],
+  fileIds: [],
+})
+const availableModels = ref<{ value: string; label: string }[]>([])
+const selectedFolderCount = computed(() => chatFilters.value.folderIds.length)
+const selectedFileCount = computed(() => chatFilters.value.fileIds.length)
 
 const userEmail = computed(() => user.value?.email ?? '')
 const hasUserMessages = computed(() => messages.value.some((message) => message.role === 'user'))
@@ -126,9 +140,31 @@ const handleAsk = async (payload: AskPayload) => {
   await scrollMessagesToBottom()
 
   try {
+    const topK = Math.min(50, Math.max(1, Number(payload.top_k) || 8))
+    const requestPayload: QueryRequest = {
+      query: payload.query,
+      top_k: topK,
+      model: payload.model,
+    }
+
+    if (payload.attachment instanceof File) {
+      requestPayload.attachment = payload.attachment
+    }
+    if (payload.attachment_id) {
+      requestPayload.attachment_id = payload.attachment_id
+    }
+
+    if (isAuthenticated.value) {
+      if (chatFilters.value.mode === 'files' && chatFilters.value.fileIds.length) {
+        requestPayload.file_ids = chatFilters.value.fileIds
+      } else if (chatFilters.value.mode === 'folders' && chatFilters.value.folderIds.length) {
+        requestPayload.folder_ids = chatFilters.value.folderIds
+      }
+    }
+
     const response = isAuthenticated.value
-      ? await askAuth(payload)
-      : await askPublic(payload)
+      ? await askAuth(requestPayload)
+      : await askPublic(requestPayload)
 
     pushAssistantMessage(response)
     await scrollMessagesToBottom()
@@ -161,6 +197,7 @@ const handleSignIn = async (payload: { email: string; password: string }) => {
     }
 
     setAuth(result.session, result.user)
+    await loadModels()
     await loadHistory()
     isAuthModalOpen.value = false
   } catch (error) {
@@ -179,6 +216,7 @@ const handleSignUp = async (payload: { email: string; password: string }) => {
     const result = await signUp(payload)
     if (result.session && result.user) {
       setAuth(result.session, result.user)
+      await loadModels()
       await loadHistory()
       isAuthModalOpen.value = false
       return
@@ -206,9 +244,97 @@ const handleLogout = async () => {
   } finally {
     clearAuth()
     history.value = []
+    availableModels.value = []
+    uploadedAttachment.value = null
+    chatFilters.value = { mode: 'none', folderIds: [], fileIds: [] }
     authBusy.value = false
   }
 }
+
+const handleAttachmentUpload = async (file: File) => {
+  if (!isAuthenticated.value) {
+    errorText.value = `${t('errorPrefix')}: Необходимо войти, чтобы загрузить файл через скрепку.`
+    retryAction.value = null
+    return
+  }
+
+  attachmentUploadBusy.value = true
+  clearError()
+  try {
+    const uploaded = await uploadFile(file)
+    uploadedAttachment.value = {
+      id: uploaded.file_id,
+      name: uploaded.filename,
+    }
+  } catch (error) {
+    errorText.value = `${t('errorPrefix')}: ${parseError(error)}`
+    retryAction.value = null
+  } finally {
+    attachmentUploadBusy.value = false
+  }
+}
+
+const clearUploadedAttachment = () => {
+  uploadedAttachment.value = null
+}
+
+const handleKbFiltersChange = (payload: { mode: 'none' | 'folders' | 'files'; folderIds: string[]; fileIds: string[] }) => {
+  if (chatFilters.value.mode !== payload.mode) {
+    // Switching retrieval mode resets attachment-id based retrieval to avoid mixed filters.
+    uploadedAttachment.value = null
+  }
+  chatFilters.value = payload
+}
+
+const setChatFilterMode = (mode: 'none' | 'folders' | 'files') => {
+  if (chatFilters.value.mode === mode) {
+    return
+  }
+  uploadedAttachment.value = null
+  chatFilters.value = { mode, folderIds: [], fileIds: [] }
+}
+
+const loadModels = async () => {
+  try {
+    const payload = await getModels()
+    const listCandidate = Array.isArray(payload.models)
+      ? payload.models
+      : Array.isArray(payload.data)
+        ? payload.data
+        : Array.isArray(payload.items)
+          ? payload.items
+          : []
+
+    const normalized = listCandidate
+      .map((item) => {
+        if (typeof item === 'string') {
+          return { value: item, label: item }
+        }
+        if (item && typeof item === 'object') {
+          const source = item as Record<string, unknown>
+          const value = source.value ?? source.id ?? source.name ?? source.model
+          const label = source.label ?? source.name ?? source.title ?? value
+          if (typeof value === 'string' && typeof label === 'string') {
+            return { value, label }
+          }
+        }
+        return null
+      })
+      .filter((item): item is { value: string; label: string } => Boolean(item))
+
+    availableModels.value = normalized
+  } catch {
+    availableModels.value = []
+  }
+}
+
+watch(isAuthenticated, async (value) => {
+  if (value) {
+    await loadModels()
+    return
+  }
+  availableModels.value = []
+})
 
 const handleDeleteHistory = async (id: number) => {
   historyBusy.value = true
@@ -295,6 +421,7 @@ const onEscape = (event: KeyboardEvent) => {
 onMounted(async () => {
   window.addEventListener('keydown', onEscape)
   hydrate()
+  await loadModels()
 
   if (!session.value) {
     return
@@ -345,10 +472,6 @@ onBeforeUnmount(() => {
             {{ t('chatTitle') }}
           </div>
           <div ref="chatScrollEl" class="max-h-[58vh] space-y-3 overflow-y-auto p-4">
-            <div v-if="!hasUserMessages" class="rounded-xl border border-line bg-surface-muted/60 p-4 text-sm text-muted">
-              <p class="font-medium text-foreground">{{ t('chatEmptyTitle') }}</p>
-              <p class="mt-1">{{ t('chatEmptyHint') }}</p>
-            </div>
 
             <ChatMessage
               v-for="message in messages"
@@ -366,7 +489,21 @@ onBeforeUnmount(() => {
         </BaseCard>
 
         <div>
-          <ChatComposer :busy="chatBusy" @send="handleAsk" />
+          <ChatComposer
+            :busy="chatBusy"
+            :uploading-attachment="attachmentUploadBusy"
+            :uploaded-attachment-id="uploadedAttachment?.id"
+            :uploaded-attachment-name="uploadedAttachment?.name"
+            :model-options="availableModels"
+            :filter-mode="chatFilters.mode"
+            :filter-controls-disabled="!isAuthenticated"
+            :selected-folder-count="selectedFolderCount"
+            :selected-file-count="selectedFileCount"
+            @send="handleAsk"
+            @upload-attachment="handleAttachmentUpload"
+            @clear-uploaded-attachment="clearUploadedAttachment"
+            @filter-mode-change="setChatFilterMode"
+          />
         </div>
 
         <BaseAlert v-if="errorText" tone="danger" role="alert" aria-live="polite">
@@ -386,7 +523,7 @@ onBeforeUnmount(() => {
     </section>
 
     <aside class="order-3 lg:sticky lg:top-6 lg:self-start">
-      <KnowledgeBasePanel />
+      <KnowledgeBasePanel :active-mode="chatFilters.mode" @filters-change="handleKbFiltersChange" />
     </aside>
   </div>
 
