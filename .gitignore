@@ -1,0 +1,27 @@
+# Frontend artifacts
+/frontend/node_modules/
+/frontend/.nuxt/
+/frontend/.output/
+/frontend/.dist/
+/frontend/.cache/
+
+# Environment files
+.env
+.env.*
+/frontend/.env
+/frontend/.env.*
+
+# IDE / editor
+.vscode/
+!.vscode/extensions.json
+
+# Python / virtualenv
+.venv/
+.python-version
+
+# Project data
+data
+
+# OS files
+.DS_Store
+**/.DS_Store
