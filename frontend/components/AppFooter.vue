@@ -12,26 +12,15 @@ const { t } = useI18n()
         </p>
       </div>
       <div class="flex flex-col items-start gap-2">
-        <div class="rounded-full border border-brand/30 bg-brand-soft px-3 py-1 text-xs font-medium text-brand-strong">
-          <a
-            href="http://127.0.0.1:8000/docs"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="hover:underline focus-visible:ring-0"
-          >
-            {{ t('apiLabel') }}: http://127.0.0.1:8000/docs
-          </a>
+        <div class="grid gap-2 px-3 py-1 text-xs font-medium text-brand-strong">
+          <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ t('apiLabel') }}</a>
+          <a href="http://localhost:6333/dashboard#/collections" target="_blank" rel="noopener noreferrer" class="hover:underline">Qdrant</a>
+          <a href="http://127.0.0.1:54323/project/default" target="_blank" rel="noopener noreferrer" class="hover:underline">Supabase</a>
+          <a href="http://localhost:9090" target="_blank" rel="noopener noreferrer" class="hover:underline">Prometheus</a>
+          <a href="http://localhost:3001" target="_blank" rel="noopener noreferrer" class="hover:underline">Grafana (admin/admin)</a>
+          <a href="https://tr0ubad0ur.github.io/multimodal-rag-gpt/" target="_blank" rel="noopener noreferrer" class="hover:underline">Backend documentation</a>
+          <a href="https://tr0ubad0ur.github.io/multimodal-rag-gpt/FAQ/" target="_blank" rel="noopener noreferrer" class="hover:underline">FAQ</a>
         </div>
-        <div class="grid gap-1 text-xs text-muted">
-          <a href="http://localhost:6333/dashboard#/collections" target="_blank" rel="noopener noreferrer" class="hover:underline">Qdrant: http://localhost:6333/dashboard#/collections</a>
-          <a href="http://127.0.0.1:54323/project/default" target="_blank" rel="noopener noreferrer" class="hover:underline">Supabase: http://127.0.0.1:54323/project/default</a>
-          <a href="http://localhost:9090" target="_blank" rel="noopener noreferrer" class="hover:underline">Prometheus: http://localhost:9090</a>
-          <a href="http://localhost:3000" target="_blank" rel="noopener noreferrer" class="hover:underline">Grafana: http://localhost:3000 (admin/admin)</a>
-          <a href="https://tr0ubad0ur.github.io/multimodal-rag-gpt/" target="_blank" rel="noopener noreferrer" class="hover:underline">GitHub: https://tr0ubad0ur.github.io/multimodal-rag-gpt/</a>
-        </div>
-        <span class="rounded-full border border-brand/30 bg-brand-soft px-3 py-1 text-xs font-medium text-brand-strong">
-          Nuxt 4 / Vue 3
-        </span>
       </div>
     </div>
   </footer>
