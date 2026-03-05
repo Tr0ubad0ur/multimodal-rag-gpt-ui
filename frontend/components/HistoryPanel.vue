@@ -72,7 +72,7 @@ onBeforeUnmount(() => {
       </BaseButton>
     </div>
 
-    <div class="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+    <div class="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pb-16 pr-1">
       <div v-if="loading && !items.length" class="space-y-2">
         <article v-for="idx in 4" :key="idx" class="rounded-xl border border-line bg-surface p-3">
           <BaseSkeleton :lines="2" />
@@ -87,8 +87,11 @@ onBeforeUnmount(() => {
       <article
         v-for="item in items"
         :key="item.id"
-        class="ui-fade-up rounded-xl border p-3 transition"
-        :class="item.id === activeId ? 'border-brand/50 bg-brand-soft/70' : 'border-line bg-surface hover:border-line/80 hover:bg-surface-muted/70'"
+        class="ui-fade-up relative rounded-xl border p-3 transition"
+        :class="[
+          item.id === activeId ? 'border-brand/50 bg-brand-soft/70' : 'border-line bg-surface hover:border-line/80 hover:bg-surface-muted/70',
+          openMenuId === item.id ? 'z-30' : 'z-0',
+        ]"
       >
         <div class="flex items-start gap-2">
           <button class="min-w-0 flex-1 text-left" @click="emit('select', item)">
@@ -108,7 +111,7 @@ onBeforeUnmount(() => {
 
             <div
               v-if="openMenuId === item.id"
-              class="absolute right-0 top-9 z-10 min-w-40 rounded-lg border border-line bg-surface p-1 shadow-card"
+              class="absolute right-0 top-9 z-50 min-w-40 rounded-lg border border-line bg-surface p-1 shadow-card"
               @click.stop
             >
               <button

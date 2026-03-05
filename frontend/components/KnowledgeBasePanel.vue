@@ -20,15 +20,25 @@ interface KbFiltersPayload {
   fileIds: string[]
 }
 
+interface DroppedFile {
+  file: File
+  relativePath: string
+}
+
+interface MenuPosition {
+  top: number
+  left: number
+}
+
 const ROOT_FOLDER_ID = 'root'
 
 const { t } = useI18n()
-const { isAuthenticated } = useAuth()
+const config = useRuntimeConfig()
+const { isAuthenticated, accessToken } = useAuth()
 const {
   getKbTree,
   createKbFolder,
   deleteKbFolder,
-  moveKbFolder,
   getKbFiles,
   linkKbFile,
   deleteKbFile,
@@ -55,6 +65,7 @@ const folderName = ref('')
 const showCreateFolderInput = ref(false)
 const dropzoneActive = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
+const createFolderControlsRef = ref<HTMLElement | null>(null)
 const errorText = ref('')
 const treeBusy = ref(false)
 const filesBusy = ref(false)
@@ -65,9 +76,109 @@ const selectedFileFilterIds = ref<string[]>([])
 const filterMode = ref<'none' | 'folders' | 'files'>('none')
 const openFolderMenuId = ref<string | null>(null)
 const openFileMenuId = ref<string | null>(null)
-const draggingItem = ref<{ type: 'folder' | 'file'; id: string } | null>(null)
+const folderMenuPosition = ref<MenuPosition | null>(null)
+const fileMenuPosition = ref<MenuPosition | null>(null)
+const draggingFileId = ref<string | null>(null)
 const dragOverFolderId = ref<string | null>(null)
 const dragOverRoot = ref(false)
+
+const getEntryFromItem = (item: DataTransferItem): FileSystemEntry | null => {
+  return (item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntry | null }).webkitGetAsEntry?.() ?? null
+}
+
+const readDroppedEntry = async (entry: FileSystemEntry, parentPath = ''): Promise<DroppedFile[]> => {
+  const currentPath = parentPath ? `${parentPath}/${entry.name}` : entry.name
+
+  if (entry.isFile) {
+    return await new Promise<DroppedFile[]>((resolve) => {
+      ;(entry as FileSystemFileEntry).file(
+        (file) => resolve([{ file, relativePath: currentPath }]),
+        () => resolve([])
+      )
+    })
+  }
+
+  if (!entry.isDirectory) {
+    return []
+  }
+
+  const reader = (entry as FileSystemDirectoryEntry).createReader()
+  const children: FileSystemEntry[] = []
+
+  while (true) {
+    const batch = await new Promise<FileSystemEntry[]>((resolve) => {
+      reader.readEntries(resolve, () => resolve([]))
+    })
+    if (!batch.length) {
+      break
+    }
+    children.push(...batch)
+  }
+
+  const nestedFiles = await Promise.all(children.map((child) => readDroppedEntry(child, currentPath)))
+  return nestedFiles.flat()
+}
+
+const extractDroppedFiles = async (dataTransfer: DataTransfer | null): Promise<DroppedFile[]> => {
+  if (!dataTransfer) {
+    return []
+  }
+
+  if (dataTransfer.items?.length) {
+    const fromEntries = await Promise.all(
+      Array.from(dataTransfer.items)
+        .filter((item) => item.kind === 'file')
+        .map(async (item) => {
+          const entry = getEntryFromItem(item)
+          if (entry) {
+            return await readDroppedEntry(entry)
+          }
+          const file = item.getAsFile()
+          return file ? [{ file, relativePath: file.webkitRelativePath || file.name }] : []
+        })
+    )
+    const files = fromEntries.flat()
+    if (files.length) {
+      return files
+    }
+  }
+
+  return Array.from(dataTransfer.files ?? []).map((file) => ({
+    file,
+    relativePath: file.webkitRelativePath || file.name,
+  }))
+}
+
+const getFileExtension = (path: string): string => {
+  const normalized = path.replaceAll('\\', '/')
+  const filename = normalized.split('/').pop() ?? ''
+  const dotIndex = filename.lastIndexOf('.')
+  if (dotIndex <= 0 || dotIndex === filename.length - 1) {
+    return 'unknown'
+  }
+  return filename.slice(dotIndex + 1).toLowerCase()
+}
+
+const shouldSkipUnsupportedFile = (item: DroppedFile): boolean => {
+  const relativePath = (item.relativePath || item.file.name).replaceAll('\\', '/')
+  const filename = (relativePath.split('/').pop() ?? item.file.name).toLowerCase()
+  const mime = (item.file.type || '').toLowerCase()
+  const ext = getFileExtension(relativePath)
+
+  if (filename === '.ds_store' || filename === 'thumbs.db') {
+    return true
+  }
+  if (filename.startsWith('._')) {
+    return true
+  }
+  if (ext === 'unknown') {
+    return true
+  }
+  if (!mime || mime === 'application/octet-stream') {
+    return false
+  }
+  return false
+}
 
 const getRootFolder = (): KnowledgeFolder => ({
   id: ROOT_FOLDER_ID,
@@ -109,6 +220,20 @@ const selectedFolderFiles = computed(() => {
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
 })
 
+const openFolderMenuItem = computed(() => {
+  if (!openFolderMenuId.value) {
+    return null
+  }
+  return childFolders.value.find((folder) => folder.id === openFolderMenuId.value) ?? null
+})
+
+const openFileMenuItem = computed(() => {
+  if (!openFileMenuId.value) {
+    return null
+  }
+  return selectedFolderFiles.value.find((file) => file.id === openFileMenuId.value) ?? null
+})
+
 const canGoUp = computed(() => selectedFolderId.value !== ROOT_FOLDER_ID)
 
 const parseFileSize = (size: number): string => {
@@ -121,8 +246,7 @@ const parseFileSize = (size: number): string => {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
-const downloadText = (filename: string, content: string) => {
-  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+const downloadBlob = (filename: string, blob: Blob) => {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -131,19 +255,37 @@ const downloadText = (filename: string, content: string) => {
   URL.revokeObjectURL(url)
 }
 
-const collectDescendantFolderIds = (folderId: string): Set<string> => {
-  const descendants = new Set<string>([folderId])
-  let changed = true
-  while (changed) {
-    changed = false
-    for (const folder of folders.value) {
-      if (folder.parentId && descendants.has(folder.parentId) && !descendants.has(folder.id)) {
-        descendants.add(folder.id)
-        changed = true
+const downloadText = (filename: string, content: string) => {
+  downloadBlob(filename, new Blob([content], { type: 'text/plain;charset=utf-8' }))
+}
+
+const downloadFile = async (fileId: string, token: string) => {
+  const response = await fetch(`${config.public.apiBase}/files/${fileId}/download`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
+  if (!response.ok || contentType.includes('application/json')) {
+    let message = `Download failed: ${response.status}`
+    try {
+      const payload = (await response.json()) as { detail?: string }
+      if (typeof payload?.detail === 'string' && payload.detail.trim()) {
+        message = payload.detail
       }
-    }
+    } catch {}
+    throw new Error(message)
   }
-  return descendants
+
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = ''
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 const ensureFolderCache = (folderId: string) => {
@@ -474,6 +616,48 @@ const addFilesToSelectedFolder = async (incomingFiles: FileList | null) => {
   }
 }
 
+const uploadFolderStructure = async (droppedFiles: DroppedFile[]) => {
+  if (!isAuthenticated.value || !droppedFiles.length) {
+    return
+  }
+  if (!accessToken.value) {
+    throw new Error('No access token')
+  }
+
+  const formData = new FormData()
+  for (const item of droppedFiles) {
+    const normalizedPath = item.relativePath.replaceAll('\\', '/').replace(/^\/+/, '') || item.file.name
+    formData.append('files', item.file, item.file.name)
+    formData.append('relative_paths', normalizedPath)
+  }
+
+  if (selectedFolderId.value !== ROOT_FOLDER_ID) {
+    formData.append('parent_id', selectedFolderId.value)
+  }
+
+  const response = await fetch(`${config.public.apiBase}/kb/folders/upload`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken.value}`,
+    },
+    body: formData,
+  })
+
+  if (!response.ok) {
+    let message = `Upload failed: ${response.status}`
+    const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
+    if (contentType.includes('application/json')) {
+      try {
+        const payload = (await response.json()) as { detail?: string }
+        if (typeof payload?.detail === 'string' && payload.detail.trim()) {
+          message = payload.detail
+        }
+      } catch {}
+    }
+    throw new Error(message)
+  }
+}
+
 const onFileInputChange = (event: Event) => {
   const target = event.target as HTMLInputElement
   void addFilesToSelectedFolder(target.files)
@@ -490,7 +674,56 @@ const openFilePicker = () => {
 const onDrop = (event: DragEvent) => {
   event.preventDefault()
   dropzoneActive.value = false
-  void addFilesToSelectedFolder(event.dataTransfer?.files ?? null)
+  void (async () => {
+    const rawDroppedFiles = await extractDroppedFiles(event.dataTransfer)
+    if (!rawDroppedFiles.length) {
+      return
+    }
+
+    for (const item of rawDroppedFiles) {
+      console.info('[kb-upload] item', { name: item.file.name, relativePath: item.relativePath })
+    }
+
+    const droppedFiles = rawDroppedFiles.filter((item) => {
+      const shouldSkip = shouldSkipUnsupportedFile(item)
+      if (shouldSkip) {
+        console.info('[kb-upload] skipped', { name: item.file.name, relativePath: item.relativePath })
+      }
+      return !shouldSkip
+    })
+    if (!droppedFiles.length) {
+      errorText.value = `${t('errorPrefix')}: no supported files to upload`
+      return
+    }
+
+    if (droppedFiles.length !== rawDroppedFiles.length) {
+      const skipped = rawDroppedFiles.length - droppedFiles.length
+      errorText.value = `${t('errorPrefix')}: skipped ${skipped} unsupported file(s)`
+    }
+
+    const hasNestedPaths = droppedFiles.some((item) => item.relativePath.includes('/'))
+    if (!hasNestedPaths) {
+      const dataTransfer = new DataTransfer()
+      for (const item of droppedFiles) {
+        dataTransfer.items.add(item.file)
+      }
+      await addFilesToSelectedFolder(dataTransfer.files)
+      return
+    }
+
+    uploadBusy.value = true
+    errorText.value = ''
+    try {
+      await uploadFolderStructure(droppedFiles)
+      await loadTree()
+      await loadFilesForFolder(selectedFolderId.value)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Request failed'
+      errorText.value = `${t('errorPrefix')}: ${message}`
+    } finally {
+      uploadBusy.value = false
+    }
+  })()
 }
 
 const onDragOver = (event: DragEvent) => {
@@ -522,32 +755,78 @@ const removeFile = async (id: string) => {
   }
 }
 
-const saveFile = (file: KnowledgeFile) => {
-  const content = [
-    `File ID: ${file.id}`,
-    `Name: ${file.name}`,
-    `Folder ID: ${file.folderId === ROOT_FOLDER_ID ? 'root' : file.folderId}`,
-    `Size: ${file.size}`,
-    `MIME: ${file.mime}`,
-    `Created: ${file.createdAt}`,
-  ].join('\n')
-  downloadText(`file-${file.name}.txt`, content)
-  openFileMenuId.value = null
+const saveFile = async (file: KnowledgeFile) => {
+  if (!isAuthenticated.value) {
+    return
+  }
+
+  actionBusy.value = true
+  errorText.value = ''
+  try {
+    if (!accessToken.value) {
+      throw new Error('No access token')
+    }
+    await downloadFile(file.id, accessToken.value)
+    openFileMenuId.value = null
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Request failed'
+    errorText.value = `${t('errorPrefix')}: ${message}`
+  } finally {
+    actionBusy.value = false
+  }
 }
 
-const toggleFolderMenu = (folderId: string) => {
-  openFileMenuId.value = null
-  openFolderMenuId.value = openFolderMenuId.value === folderId ? null : folderId
+const resolveMenuPosition = (target: EventTarget | null): MenuPosition | null => {
+  const anchor = target instanceof HTMLElement ? target : null
+  if (!anchor) {
+    return null
+  }
+  const rect = anchor.getBoundingClientRect()
+  const estimatedMenuWidth = 176
+  const estimatedMenuHeight = 108
+  const spacing = 8
+
+  const left = Math.max(
+    spacing,
+    Math.min(rect.right - estimatedMenuWidth, window.innerWidth - estimatedMenuWidth - spacing)
+  )
+  const canOpenDown = rect.bottom + spacing + estimatedMenuHeight <= window.innerHeight - spacing
+  const top = canOpenDown
+    ? rect.bottom + spacing
+    : Math.max(spacing, rect.top - estimatedMenuHeight - spacing)
+
+  return { top, left }
 }
 
-const toggleFileMenu = (fileId: string) => {
+const toggleFolderMenu = (folderId: string, event?: MouseEvent) => {
+  openFileMenuId.value = null
+  fileMenuPosition.value = null
+  if (openFolderMenuId.value === folderId) {
+    openFolderMenuId.value = null
+    folderMenuPosition.value = null
+    return
+  }
+  openFolderMenuId.value = folderId
+  folderMenuPosition.value = resolveMenuPosition(event?.currentTarget ?? null)
+}
+
+const toggleFileMenu = (fileId: string, event?: MouseEvent) => {
   openFolderMenuId.value = null
-  openFileMenuId.value = openFileMenuId.value === fileId ? null : fileId
+  folderMenuPosition.value = null
+  if (openFileMenuId.value === fileId) {
+    openFileMenuId.value = null
+    fileMenuPosition.value = null
+    return
+  }
+  openFileMenuId.value = fileId
+  fileMenuPosition.value = resolveMenuPosition(event?.currentTarget ?? null)
 }
 
 const closeMenus = () => {
   openFolderMenuId.value = null
   openFileMenuId.value = null
+  folderMenuPosition.value = null
+  fileMenuPosition.value = null
 }
 
 const moveFileToFolder = async (fileId: string, targetFolderId: string | null) => {
@@ -569,46 +848,22 @@ const moveFileToFolder = async (fileId: string, targetFolderId: string | null) =
   }
 }
 
-const moveFolderToParent = async (folderId: string, targetParentId: string | null) => {
-  if (folderId === targetParentId) {
-    return
-  }
-
-  const descendants = collectDescendantFolderIds(folderId)
-  if (targetParentId && descendants.has(targetParentId)) {
-    errorText.value = `${t('errorPrefix')}: invalid folder move`
-    return
-  }
-
-  actionBusy.value = true
-  errorText.value = ''
-  try {
-    await moveKbFolder(folderId, targetParentId)
-    await loadTree()
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Request failed'
-    errorText.value = `${t('errorPrefix')}: ${message}`
-  } finally {
-    actionBusy.value = false
-  }
-}
-
-const onDragHandleStart = (type: 'folder' | 'file', id: string, event: DragEvent) => {
+const onDragHandleStart = (id: string, event: DragEvent) => {
   if (!event.dataTransfer) {
     return
   }
-  draggingItem.value = { type, id }
+  draggingFileId.value = id
   event.dataTransfer.effectAllowed = 'move'
 }
 
 const onDragHandleEnd = () => {
-  draggingItem.value = null
+  draggingFileId.value = null
   dragOverFolderId.value = null
   dragOverRoot.value = false
 }
 
 const onFolderDragOver = (folderId: string, event: DragEvent) => {
-  if (!draggingItem.value) {
+  if (!draggingFileId.value) {
     return
   }
   event.preventDefault()
@@ -622,19 +877,15 @@ const onFolderDragLeave = () => {
 const onFolderDrop = async (folderId: string, event: DragEvent) => {
   event.preventDefault()
   dragOverFolderId.value = null
-  const item = draggingItem.value
-  if (!item) {
+  const fileId = draggingFileId.value
+  if (!fileId) {
     return
   }
-  if (item.type === 'file') {
-    await moveFileToFolder(item.id, folderId)
-  } else {
-    await moveFolderToParent(item.id, folderId)
-  }
+  await moveFileToFolder(fileId, folderId)
 }
 
 const onRootDragOver = (event: DragEvent) => {
-  if (!draggingItem.value) {
+  if (!draggingFileId.value) {
     return
   }
   event.preventDefault()
@@ -648,15 +899,11 @@ const onRootDragLeave = () => {
 const onRootDrop = async (event: DragEvent) => {
   event.preventDefault()
   dragOverRoot.value = false
-  const item = draggingItem.value
-  if (!item) {
+  const fileId = draggingFileId.value
+  if (!fileId) {
     return
   }
-  if (item.type === 'file') {
-    await moveFileToFolder(item.id, null)
-  } else {
-    await moveFolderToParent(item.id, null)
-  }
+  await moveFileToFolder(fileId, null)
 }
 
 const toggleFolderFilter = (folderId: string, checked: boolean) => {
@@ -756,7 +1003,14 @@ watch(
   { immediate: true }
 )
 
-const onWindowClick = () => {
+const onWindowClick = (event: MouseEvent) => {
+  if (showCreateFolderInput.value && !folderName.value.trim()) {
+    const target = event.target as Node | null
+    if (target && createFolderControlsRef.value && !createFolderControlsRef.value.contains(target)) {
+      showCreateFolderInput.value = false
+      errorText.value = ''
+    }
+  }
   closeMenus()
 }
 
@@ -781,15 +1035,25 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="mt-3 rounded-xl border border-line bg-surface-muted/40 p-3">
-      <div class="flex items-center justify-between gap-2">
-        <p class="truncate text-xs font-semibold text-muted">{{ currentPath }}</p>
-        <div class="flex items-center gap-1">
-          <BaseButton size="sm" variant="secondary" :disabled="!isAuthenticated || actionBusy || treeBusy" @click="handleCreateFolderClick">
-            +
-          </BaseButton>
-          <BaseButton size="sm" variant="secondary" :disabled="!canGoUp || actionBusy || treeBusy" @click="goUp">
-            &larr;
-          </BaseButton>
+      <div ref="createFolderControlsRef">
+        <div class="flex items-center justify-between gap-2">
+          <p class="truncate text-xs font-semibold text-muted">{{ currentPath }}</p>
+          <div class="flex items-center gap-1">
+            <BaseButton size="sm" variant="secondary" :disabled="!isAuthenticated || actionBusy || treeBusy" @click="handleCreateFolderClick">
+              +
+            </BaseButton>
+            <BaseButton size="sm" variant="secondary" :disabled="!canGoUp || actionBusy || treeBusy" @click="goUp">
+              &larr;
+            </BaseButton>
+          </div>
+        </div>
+      
+        <div v-if="showCreateFolderInput" class="mt-2">
+          <BaseInput
+            v-model="folderName"
+            :placeholder="t('kbFolderPlaceholder')"
+            @keydown.enter.prevent="createFolder"
+          />
         </div>
       </div>
       <div
@@ -802,38 +1066,21 @@ onBeforeUnmount(() => {
         {{ t('kbRootFolder') }} · {{ t('dragToMove') }}
       </div>
 
-      <div v-if="showCreateFolderInput" class="mt-2">
-        <BaseInput
-          v-model="folderName"
-          :placeholder="t('kbFolderPlaceholder')"
-          @keydown.enter.prevent="createFolder"
-        />
-      </div>
-
       <div class="mt-3">
-        <div v-if="childFolders.length" class="max-h-[11rem] space-y-2 overflow-y-auto pr-1">
+        <div v-if="childFolders.length" class="max-h-[11rem] space-y-2 overflow-y-auto pb-16 pr-1">
           <article
             v-for="folder in childFolders"
             :key="folder.id"
-            class="flex items-center justify-between gap-2 rounded-lg border p-2 transition"
+            class="relative flex items-center justify-between gap-2 rounded-lg border p-2 transition"
             :class="[
               selectedFolderFilterIds.includes(folder.id) ? 'border-brand/50 bg-brand-soft/70' : 'border-line bg-surface',
               dragOverFolderId === folder.id ? 'ring-2 ring-brand/40' : '',
+              openFolderMenuId === folder.id ? 'z-30' : 'z-0',
             ]"
             @dragover="onFolderDragOver(folder.id, $event)"
             @dragleave="onFolderDragLeave"
             @drop="onFolderDrop(folder.id, $event)"
           >
-            <button
-              type="button"
-              class="cursor-grab rounded px-1 text-muted active:cursor-grabbing"
-              draggable="true"
-              :title="t('dragToMove')"
-              @dragstart="onDragHandleStart('folder', folder.id, $event)"
-              @dragend="onDragHandleEnd"
-            >
-              ≡
-            </button>
             <button
               class="min-w-0 flex-1 text-left text-sm text-foreground"
               :class="filterMode === 'folders' ? 'cursor-pointer' : ''"
@@ -846,30 +1093,10 @@ onBeforeUnmount(() => {
                 type="button"
                 class="ui-btn-secondary h-8 w-8 !px-0"
                 :aria-label="t('moreActions')"
-                @click.stop="toggleFolderMenu(folder.id)"
+                @click.stop="toggleFolderMenu(folder.id, $event)"
               >
                 ⋯
               </button>
-              <div
-                v-if="openFolderMenuId === folder.id"
-                class="absolute right-0 top-9 z-20 min-w-40 rounded-lg border border-line bg-surface p-1 shadow-card"
-                @click.stop
-              >
-                <button
-                  type="button"
-                  class="w-full rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-muted"
-                  @click="saveFolder(folder)"
-                >
-                  {{ t('saveFolder') }}
-                </button>
-                <button
-                  type="button"
-                  class="w-full rounded-md px-2 py-1.5 text-left text-sm text-danger transition hover:bg-danger-soft/70"
-                  @click="deleteFolder(folder.id); closeMenus()"
-                >
-                  {{ t('delete') }}
-                </button>
-              </div>
             </div>
           </article>
         </div>
@@ -883,12 +1110,15 @@ onBeforeUnmount(() => {
         <BaseSkeleton :lines="2" />
       </div>
 
-      <div v-else-if="selectedFolderFiles.length" class="max-h-[10rem] space-y-2 overflow-y-auto pr-1">
+      <div v-else-if="selectedFolderFiles.length" class="max-h-[10rem] space-y-2 overflow-y-auto pb-16 pr-1">
         <article
           v-for="file in selectedFolderFiles"
           :key="file.id"
-          class="flex items-start gap-2 rounded-lg border p-2 transition"
-          :class="selectedFileFilterIds.includes(file.id) ? 'border-brand/50 bg-brand-soft/70' : 'border-line bg-surface'"
+          class="relative flex items-start gap-2 rounded-lg border p-2 transition"
+          :class="[
+            selectedFileFilterIds.includes(file.id) ? 'border-brand/50 bg-brand-soft/70' : 'border-line bg-surface',
+            openFileMenuId === file.id ? 'z-30' : 'z-0',
+          ]"
           @click="handleFileRowClick(file.id)"
         >
           <button
@@ -896,7 +1126,7 @@ onBeforeUnmount(() => {
             class="mt-0.5 cursor-grab rounded px-1 text-muted active:cursor-grabbing"
             draggable="true"
             :title="t('dragToMove')"
-            @dragstart="onDragHandleStart('file', file.id, $event)"
+            @dragstart="onDragHandleStart(file.id, $event)"
             @dragend="onDragHandleEnd"
           >
             ≡
@@ -910,30 +1140,10 @@ onBeforeUnmount(() => {
               type="button"
               class="ui-btn-secondary h-8 w-8 !px-0"
               :aria-label="t('moreActions')"
-              @click.stop="toggleFileMenu(file.id)"
+              @click.stop="toggleFileMenu(file.id, $event)"
             >
               ⋯
             </button>
-            <div
-              v-if="openFileMenuId === file.id"
-              class="absolute right-0 top-9 z-20 min-w-40 rounded-lg border border-line bg-surface p-1 shadow-card"
-              @click.stop
-            >
-              <button
-                type="button"
-                class="w-full rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-muted"
-                @click="saveFile(file)"
-              >
-                {{ t('saveFile') }}
-              </button>
-              <button
-                type="button"
-                class="w-full rounded-md px-2 py-1.5 text-left text-sm text-danger transition hover:bg-danger-soft/70"
-                @click="removeFile(file.id); closeMenus()"
-              >
-                {{ t('delete') }}
-              </button>
-            </div>
           </div>
         </article>
       </div>
@@ -969,5 +1179,53 @@ onBeforeUnmount(() => {
     <BaseAlert v-if="errorText" tone="danger" class="mt-3" role="alert">
       {{ errorText }}
     </BaseAlert>
+
+    <Teleport to="body">
+      <div
+        v-if="openFolderMenuItem && folderMenuPosition"
+        class="fixed z-[120] min-w-40 rounded-lg border border-line bg-surface p-1 shadow-card"
+        :style="{ top: `${folderMenuPosition.top}px`, left: `${folderMenuPosition.left}px` }"
+        @click.stop
+      >
+        <button
+          type="button"
+          class="w-full rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-muted"
+          @click="saveFolder(openFolderMenuItem)"
+        >
+          {{ t('saveFolder') }}
+        </button>
+        <button
+          type="button"
+          class="w-full rounded-md px-2 py-1.5 text-left text-sm text-danger transition hover:bg-danger-soft/70"
+          @click="deleteFolder(openFolderMenuItem.id); closeMenus()"
+        >
+          {{ t('delete') }}
+        </button>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div
+        v-if="openFileMenuItem && fileMenuPosition"
+        class="fixed z-[120] min-w-40 rounded-lg border border-line bg-surface p-1 shadow-card"
+        :style="{ top: `${fileMenuPosition.top}px`, left: `${fileMenuPosition.left}px` }"
+        @click.stop
+      >
+        <button
+          type="button"
+          class="w-full rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-muted"
+          @click="saveFile(openFileMenuItem)"
+        >
+          {{ t('saveFile') }}
+        </button>
+        <button
+          type="button"
+          class="w-full rounded-md px-2 py-1.5 text-left text-sm text-danger transition hover:bg-danger-soft/70"
+          @click="removeFile(openFileMenuItem.id); closeMenus()"
+        >
+          {{ t('delete') }}
+        </button>
+      </div>
+    </Teleport>
   </BaseCard>
 </template>
