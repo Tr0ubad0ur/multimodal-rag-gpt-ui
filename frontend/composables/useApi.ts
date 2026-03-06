@@ -2,8 +2,13 @@ import type {
   AuthResponse,
   AuthUser,
   EmbeddingResponse,
+  FileProcessingResponse,
   FileUploadResponse,
+  FolderUploadResponse,
   HistoryResponse,
+  IngestDlqItem,
+  IngestJob,
+  IngestJobStatus,
   ImageEmbeddingRequest,
   KbFile,
   KbFolder,
@@ -125,7 +130,7 @@ export const useApi = () => {
       method?: 'GET' | 'POST' | 'DELETE' | 'PATCH'
       body?: unknown
       auth?: boolean
-      query?: Record<string, string | undefined>
+      query?: Record<string, string | number | boolean | null | undefined>
       _retried?: boolean
     } = {}
   ): Promise<T> => {
@@ -222,6 +227,13 @@ export const useApi = () => {
     })
   }
 
+  const uploadFolderFiles = (payload: FormData) =>
+    apiFetch<FolderUploadResponse>('/kb/folders/upload', {
+      method: 'POST',
+      body: payload,
+      auth: true,
+    })
+
   const getKbTree = () =>
     apiFetch<{ folders?: unknown[]; files?: unknown[]; tree?: unknown[]; root_files?: unknown[] }>('/kb/tree', {
       auth: true,
@@ -272,6 +284,78 @@ export const useApi = () => {
       auth: true,
     })
 
+  const getFileProcessing = (fileId: string) =>
+    apiFetch<FileProcessingResponse>(`/files/${fileId}/processing`, {
+      auth: true,
+    })
+
+  const reindexFile = (fileId: string) =>
+    apiFetch<{ jobs?: Array<Record<string, unknown>>; [key: string]: unknown }>(`/files/${fileId}/reindex`, {
+      method: 'POST',
+      auth: true,
+    })
+
+  const listIngestJobs = (params?: { status?: IngestJobStatus; limit?: number }) =>
+    apiFetch<{ data: IngestJob[] }>('/ingest/jobs', {
+      auth: true,
+      query: {
+        status: params?.status,
+        limit: params?.limit,
+      },
+    })
+
+  const retryIngestJob = (jobId: string) =>
+    apiFetch<{ job?: IngestJob }>(`/ingest/jobs/${jobId}/retry`, {
+      method: 'POST',
+      auth: true,
+    })
+
+  const listIngestDlq = (params?: { limit?: number }) =>
+    apiFetch<{ data: IngestDlqItem[] }>('/ingest/dlq', {
+      auth: true,
+      query: {
+        limit: params?.limit,
+      },
+    })
+
+  const requeueIngestDlqItem = (dlqId: number) =>
+    apiFetch<{ job?: IngestJob }>(`/ingest/dlq/${dlqId}/requeue`, {
+      method: 'POST',
+      auth: true,
+    })
+
+  const adminConsistencyCleanup = (params: {
+    dry_run: boolean
+    cleanup_missing_storage_records?: boolean
+    cleanup_orphan_uploads?: boolean
+    cleanup_orphan_vectors?: boolean
+    uploads_min_age_seconds?: number
+    limit?: number
+  }) =>
+    apiFetch<Record<string, unknown>>('/admin/consistency/cleanup', {
+      method: 'POST',
+      auth: true,
+      query: params,
+    })
+
+  const adminConsistencyReindex = (params: {
+    user_id?: string
+    limit?: number
+    only_missing_vectors?: boolean
+  }) =>
+    apiFetch<Record<string, unknown>>('/admin/consistency/reindex', {
+      method: 'POST',
+      auth: true,
+      query: params,
+    })
+
+  const getMetricsText = async () => {
+    return await $fetch<string>('/metrics', {
+      baseURL: config.public.apiBase,
+      responseType: 'text',
+    })
+  }
+
   const getModels = () =>
     apiFetch<{ models?: unknown[]; data?: unknown[]; items?: unknown[]; [key: string]: unknown }>('/models', {
       auth: true,
@@ -312,6 +396,7 @@ export const useApi = () => {
     askPublic,
     askAuth,
     uploadFile,
+    uploadFolderFiles,
     getKbTree,
     createKbFolder,
     deleteKbFolder,
@@ -320,6 +405,15 @@ export const useApi = () => {
     linkKbFile,
     deleteKbFile,
     deleteUploadedFile,
+    getFileProcessing,
+    reindexFile,
+    listIngestJobs,
+    retryIngestJob,
+    listIngestDlq,
+    requeueIngestDlqItem,
+    adminConsistencyCleanup,
+    adminConsistencyReindex,
+    getMetricsText,
     getModels,
     getHistory,
     deleteHistory,

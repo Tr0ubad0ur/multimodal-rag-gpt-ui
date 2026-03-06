@@ -88,6 +88,56 @@ export interface FileUploadResponse {
   mime: string
   size: number
   storage_path: string
+  ingest_job_id?: string | null
+  deduplicated?: boolean
+}
+
+export type IngestJobStatus = 'queued' | 'processing' | 'completed' | 'failed'
+export type FileProcessingStatus = IngestJobStatus | 'not_indexed'
+
+export interface IngestJob {
+  id: string
+  user_id?: string | null
+  file_id: string
+  status: IngestJobStatus
+  attempt?: number
+  error?: string | null
+  created_at?: string
+  started_at?: string | null
+  finished_at?: string | null
+  dead_lettered_at?: string | null
+  [key: string]: unknown
+}
+
+export interface FileProcessingResponse {
+  file_id: string
+  status: FileProcessingStatus
+  jobs: IngestJob[]
+}
+
+export interface IngestDlqItem {
+  id: number
+  job_id: string
+  user_id?: string | null
+  reason?: string
+  created_at?: string
+  payload?: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface FolderUploadItem {
+  file_id: string
+  filename: string
+  mime: string
+  size: number
+  relative_path: string
+  folder_id?: string | null
+  ingest_job_id?: string | null
+  deduplicated?: boolean
+}
+
+export interface FolderUploadResponse {
+  uploaded: FolderUploadItem[]
 }
 
 export interface KbFolder {

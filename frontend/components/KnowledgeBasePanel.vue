@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import type { FileProcessingStatus } from '~/types/api'
+import { formatRateAndQuotaError, parseApiError } from '~/composables/useApiError'
+
 interface KnowledgeFolder {
   id: string
   name: string
@@ -30,6 +33,13 @@ interface MenuPosition {
   left: number
 }
 
+interface FileProcessingState {
+  status: FileProcessingStatus
+  latestJobId: string | null
+  latestError: string | null
+  latestFailedJobId: string | null
+}
+
 const ROOT_FOLDER_ID = 'root'
 
 const { t } = useI18n()
@@ -43,6 +53,10 @@ const {
   linkKbFile,
   deleteKbFile,
   uploadFile,
+  uploadFolderFiles,
+  getFileProcessing,
+  reindexFile,
+  retryIngestJob,
 } = useApi()
 
 const props = withDefaults(
@@ -81,6 +95,10 @@ const fileMenuPosition = ref<MenuPosition | null>(null)
 const draggingFileId = ref<string | null>(null)
 const dragOverFolderId = ref<string | null>(null)
 const dragOverRoot = ref(false)
+const uploadInfoText = ref('')
+const processingByFileId = ref<Record<string, FileProcessingState>>({})
+const processingBusy = ref(false)
+let processingPollTimer: ReturnType<typeof setInterval> | null = null
 
 const getEntryFromItem = (item: DataTransferItem): FileSystemEntry | null => {
   return (item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntry | null }).webkitGetAsEntry?.() ?? null
@@ -409,6 +427,88 @@ const parseFilesList = (payload: unknown, fallbackFolderId: string): KnowledgeFi
     .filter((item): item is KnowledgeFile => Boolean(item))
 }
 
+const formatError = (error: unknown): string => formatRateAndQuotaError(parseApiError(error), t('errorPrefix'))
+
+const getProcessingLabel = (status: FileProcessingStatus): string => {
+  switch (status) {
+    case 'queued':
+      return t('processingQueued')
+    case 'processing':
+      return t('processingInProgress')
+    case 'completed':
+      return t('processingCompleted')
+    case 'failed':
+      return t('processingFailed')
+    case 'not_indexed':
+      return t('processingNotIndexed')
+    default:
+      return status
+  }
+}
+
+const getProcessingClass = (status: FileProcessingStatus): string => {
+  switch (status) {
+    case 'completed':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+    case 'failed':
+      return 'border-danger/40 bg-danger-soft text-danger'
+    case 'queued':
+      return 'border-sky-200 bg-sky-50 text-sky-700'
+    case 'processing':
+      return 'border-amber-200 bg-amber-50 text-amber-700'
+    case 'not_indexed':
+      return 'border-line bg-surface text-muted'
+    default:
+      return 'border-line bg-surface text-muted'
+  }
+}
+
+const defaultProcessingState = (): FileProcessingState => ({
+  status: 'not_indexed',
+  latestJobId: null,
+  latestError: null,
+  latestFailedJobId: null,
+})
+
+const getFileProcessingState = (fileId: string): FileProcessingState => {
+  return processingByFileId.value[fileId] ?? defaultProcessingState()
+}
+
+const refreshFileProcessing = async (fileId: string) => {
+  const payload = await getFileProcessing(fileId)
+  const latest = Array.isArray(payload.jobs) ? payload.jobs[0] : null
+  const failed = Array.isArray(payload.jobs) ? payload.jobs.find((job) => job.status === 'failed') : null
+  processingByFileId.value[fileId] = {
+    status: payload.status ?? 'not_indexed',
+    latestJobId: latest?.id ?? null,
+    latestError: typeof latest?.error === 'string' ? latest.error : null,
+    latestFailedJobId: failed?.id ?? null,
+  }
+}
+
+const refreshVisibleFileProcessing = async () => {
+  if (!isAuthenticated.value || !selectedFolderFiles.value.length) {
+    processingByFileId.value = {}
+    return
+  }
+
+  processingBusy.value = true
+  try {
+    await Promise.all(selectedFolderFiles.value.map((file) => refreshFileProcessing(file.id)))
+  } catch (error) {
+    errorText.value = formatError(error)
+  } finally {
+    processingBusy.value = false
+  }
+}
+
+const hasRunningProcessing = computed(() =>
+  selectedFolderFiles.value.some((file) => {
+    const state = getFileProcessingState(file.id)
+    return state.status === 'queued' || state.status === 'processing'
+  })
+)
+
 const emitFilters = () => {
   emit('filtersChange', {
     mode: filterMode.value,
@@ -444,11 +544,11 @@ const loadFilesForFolder = async (folderId: string) => {
   try {
     const payload = await getKbFiles(folderId === ROOT_FOLDER_ID ? null : folderId)
     filesByFolder.value[folderId] = parseFilesList(payload, folderId)
+    await refreshVisibleFileProcessing()
     pruneFilters()
     emitFilters()
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Request failed'
-    errorText.value = `${t('errorPrefix')}: ${message}`
+    errorText.value = formatError(error)
   } finally {
     filesBusy.value = false
   }
@@ -487,8 +587,7 @@ const loadTree = async () => {
 
     await loadFilesForFolder(selectedFolderId.value)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Request failed'
-    errorText.value = `${t('errorPrefix')}: ${message}`
+    errorText.value = formatError(error)
   } finally {
     treeBusy.value = false
   }
@@ -511,8 +610,7 @@ const createFolder = async () => {
     showCreateFolderInput.value = false
     await loadTree()
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Request failed'
-    errorText.value = `${t('errorPrefix')}: ${message}`
+    errorText.value = formatError(error)
   } finally {
     actionBusy.value = false
   }
@@ -566,8 +664,7 @@ const deleteFolder = async (folderId: string) => {
     }
     await loadTree()
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Request failed'
-    errorText.value = `${t('errorPrefix')}: ${message}`
+    errorText.value = formatError(error)
   } finally {
     actionBusy.value = false
   }
@@ -590,10 +687,17 @@ const addFilesToSelectedFolder = async (incomingFiles: FileList | null) => {
 
   uploadBusy.value = true
   errorText.value = ''
+  uploadInfoText.value = ''
   try {
     const folderId = selectedFolderId.value === ROOT_FOLDER_ID ? null : selectedFolderId.value
+    const uploadNotes: string[] = []
     for (const file of Array.from(incomingFiles)) {
       const uploaded = await uploadFile(file)
+      if (uploaded.deduplicated) {
+        uploadNotes.push(`${uploaded.filename}: ${t('uploadDeduplicated')}`)
+      } else if (uploaded.ingest_job_id) {
+        uploadNotes.push(`${uploaded.filename}: ${t('uploadIngestJob')} ${uploaded.ingest_job_id}`)
+      }
       await linkKbFile(
         folderId
           ? {
@@ -608,9 +712,9 @@ const addFilesToSelectedFolder = async (incomingFiles: FileList | null) => {
 
     await loadTree()
     await loadFilesForFolder(selectedFolderId.value)
+    uploadInfoText.value = uploadNotes.join(' | ')
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Request failed'
-    errorText.value = `${t('errorPrefix')}: ${message}`
+    errorText.value = formatError(error)
   } finally {
     uploadBusy.value = false
   }
@@ -619,9 +723,6 @@ const addFilesToSelectedFolder = async (incomingFiles: FileList | null) => {
 const uploadFolderStructure = async (droppedFiles: DroppedFile[]) => {
   if (!isAuthenticated.value || !droppedFiles.length) {
     return
-  }
-  if (!accessToken.value) {
-    throw new Error('No access token')
   }
 
   const formData = new FormData()
@@ -635,27 +736,7 @@ const uploadFolderStructure = async (droppedFiles: DroppedFile[]) => {
     formData.append('parent_id', selectedFolderId.value)
   }
 
-  const response = await fetch(`${config.public.apiBase}/kb/folders/upload`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken.value}`,
-    },
-    body: formData,
-  })
-
-  if (!response.ok) {
-    let message = `Upload failed: ${response.status}`
-    const contentType = (response.headers.get('content-type') ?? '').toLowerCase()
-    if (contentType.includes('application/json')) {
-      try {
-        const payload = (await response.json()) as { detail?: string }
-        if (typeof payload?.detail === 'string' && payload.detail.trim()) {
-          message = payload.detail
-        }
-      } catch {}
-    }
-    throw new Error(message)
-  }
+  return await uploadFolderFiles(formData)
 }
 
 const onFileInputChange = (event: Event) => {
@@ -713,13 +794,27 @@ const onDrop = (event: DragEvent) => {
 
     uploadBusy.value = true
     errorText.value = ''
+    uploadInfoText.value = ''
     try {
-      await uploadFolderStructure(droppedFiles)
+      const result = await uploadFolderStructure(droppedFiles)
+      const dedupCount = (result.uploaded ?? []).filter((item) => item.deduplicated).length
+      const jobIds = (result.uploaded ?? [])
+        .map((item) => item.ingest_job_id)
+        .filter((item): item is string => typeof item === 'string' && item.length > 0)
+      if (dedupCount > 0 || jobIds.length > 0) {
+        const parts: string[] = []
+        if (jobIds.length > 0) {
+          parts.push(`${t('uploadIngestJobsCount')}: ${jobIds.length}`)
+        }
+        if (dedupCount > 0) {
+          parts.push(`${t('uploadDeduplicatedCount')}: ${dedupCount}`)
+        }
+        uploadInfoText.value = parts.join(' · ')
+      }
       await loadTree()
       await loadFilesForFolder(selectedFolderId.value)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Request failed'
-      errorText.value = `${t('errorPrefix')}: ${message}`
+      errorText.value = formatError(error)
     } finally {
       uploadBusy.value = false
     }
@@ -748,8 +843,48 @@ const removeFile = async (id: string) => {
     selectedFileFilterIds.value = selectedFileFilterIds.value.filter((fileId) => fileId !== id)
     emitFilters()
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Request failed'
-    errorText.value = `${t('errorPrefix')}: ${message}`
+    errorText.value = formatError(error)
+  } finally {
+    actionBusy.value = false
+  }
+}
+
+const reindexKbFile = async (fileId: string) => {
+  if (!isAuthenticated.value) {
+    return
+  }
+
+  actionBusy.value = true
+  errorText.value = ''
+  try {
+    await reindexFile(fileId)
+    uploadInfoText.value = t('reindexScheduled')
+    await refreshFileProcessing(fileId)
+  } catch (error) {
+    errorText.value = formatError(error)
+  } finally {
+    actionBusy.value = false
+  }
+}
+
+const retryFailedJob = async (fileId: string) => {
+  if (!isAuthenticated.value) {
+    return
+  }
+
+  const state = getFileProcessingState(fileId)
+  if (!state.latestFailedJobId) {
+    return
+  }
+
+  actionBusy.value = true
+  errorText.value = ''
+  try {
+    await retryIngestJob(state.latestFailedJobId)
+    uploadInfoText.value = t('retryScheduled')
+    await refreshFileProcessing(fileId)
+  } catch (error) {
+    errorText.value = formatError(error)
   } finally {
     actionBusy.value = false
   }
@@ -769,8 +904,7 @@ const saveFile = async (file: KnowledgeFile) => {
     await downloadFile(file.id, accessToken.value)
     openFileMenuId.value = null
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Request failed'
-    errorText.value = `${t('errorPrefix')}: ${message}`
+    errorText.value = formatError(error)
   } finally {
     actionBusy.value = false
   }
@@ -841,8 +975,7 @@ const moveFileToFolder = async (fileId: string, targetFolderId: string | null) =
     await loadTree()
     await loadFilesForFolder(selectedFolderId.value)
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Request failed'
-    errorText.value = `${t('errorPrefix')}: ${message}`
+    errorText.value = formatError(error)
   } finally {
     actionBusy.value = false
   }
@@ -979,17 +1112,38 @@ const handleFileRowClick = (fileId: string) => {
   }
 }
 
+const stopProcessingPolling = () => {
+  if (processingPollTimer) {
+    clearInterval(processingPollTimer)
+    processingPollTimer = null
+  }
+}
+
+const startProcessingPolling = () => {
+  stopProcessingPolling()
+  processingPollTimer = setInterval(() => {
+    if (!isAuthenticated.value || !hasRunningProcessing.value) {
+      return
+    }
+    void refreshVisibleFileProcessing()
+  }, 8000)
+}
+
 watch(isAuthenticated, async (value) => {
   if (!value) {
     folders.value = []
     filesByFolder.value = { [ROOT_FOLDER_ID]: [] }
+    processingByFileId.value = {}
+    uploadInfoText.value = ''
     selectedFolderId.value = ROOT_FOLDER_ID
     selectedFolderFilterIds.value = []
     selectedFileFilterIds.value = []
     filterMode.value = 'none'
+    stopProcessingPolling()
     emitFilters()
     return
   }
+  startProcessingPolling()
   await loadTree()
 })
 
@@ -1001,6 +1155,16 @@ watch(
     }
   },
   { immediate: true }
+)
+
+watch(
+  () => selectedFolderId.value,
+  () => {
+    if (!isAuthenticated.value) {
+      return
+    }
+    void refreshVisibleFileProcessing()
+  }
 )
 
 const onWindowClick = (event: MouseEvent) => {
@@ -1017,6 +1181,7 @@ const onWindowClick = (event: MouseEvent) => {
 onMounted(async () => {
   window.addEventListener('click', onWindowClick)
   if (isAuthenticated.value) {
+    startProcessingPolling()
     await loadTree()
   } else {
     emitFilters()
@@ -1025,6 +1190,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('click', onWindowClick)
+  stopProcessingPolling()
 })
 </script>
 
@@ -1134,6 +1300,23 @@ onBeforeUnmount(() => {
           <div class="min-w-0 flex-1">
             <p class="truncate text-sm text-foreground">{{ file.name }}</p>
             <p class="text-xs text-muted">{{ parseFileSize(file.size) }} · {{ new Date(file.createdAt).toLocaleString() }}</p>
+            <div class="mt-1 flex items-center gap-2">
+              <span
+                class="inline-flex rounded-md border px-1.5 py-0.5 text-[11px] font-medium"
+                :class="getProcessingClass(getFileProcessingState(file.id).status)"
+              >
+                {{ getProcessingLabel(getFileProcessingState(file.id).status) }}
+              </span>
+              <span v-if="getFileProcessingState(file.id).latestJobId" class="text-[11px] text-muted">
+                job: {{ getFileProcessingState(file.id).latestJobId }}
+              </span>
+            </div>
+            <p
+              v-if="getFileProcessingState(file.id).status === 'failed' && getFileProcessingState(file.id).latestError"
+              class="mt-1 line-clamp-2 text-[11px] text-danger"
+            >
+              {{ getFileProcessingState(file.id).latestError }}
+            </p>
           </div>
           <div class="relative">
             <button
@@ -1174,6 +1357,14 @@ onBeforeUnmount(() => {
 
     <BaseAlert v-if="uploadBusy" tone="info" class="mt-3" role="status">
       {{ t('processing') }}
+    </BaseAlert>
+
+    <BaseAlert v-if="processingBusy" tone="info" class="mt-3" role="status">
+      {{ t('processingStatusesUpdating') }}
+    </BaseAlert>
+
+    <BaseAlert v-if="uploadInfoText" tone="info" class="mt-3" role="status">
+      {{ uploadInfoText }}
     </BaseAlert>
 
     <BaseAlert v-if="errorText" tone="danger" class="mt-3" role="alert">
@@ -1217,6 +1408,21 @@ onBeforeUnmount(() => {
           @click="saveFile(openFileMenuItem)"
         >
           {{ t('saveFile') }}
+        </button>
+        <button
+          type="button"
+          class="w-full rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-muted"
+          @click="reindexKbFile(openFileMenuItem.id); closeMenus()"
+        >
+          {{ t('reindexFile') }}
+        </button>
+        <button
+          v-if="getFileProcessingState(openFileMenuItem.id).status === 'failed' && getFileProcessingState(openFileMenuItem.id).latestFailedJobId"
+          type="button"
+          class="w-full rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-muted"
+          @click="retryFailedJob(openFileMenuItem.id); closeMenus()"
+        >
+          {{ t('retryFailedJob') }}
         </button>
         <button
           type="button"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { HistoryItem, QueryRequest, QueryResponse, RetrievedDoc } from '~/types/api'
+import { formatRateAndQuotaError, parseApiError } from '~/composables/useApiError'
 
 interface Message {
   id: string
@@ -59,7 +60,8 @@ const retryAction = ref<RetryAction>(null)
 const lastAskPayload = ref<AskPayload | null>(null)
 const lastDeleteId = ref<number | null>(null)
 const lastAuthPayload = ref<{ mode: 'signin' | 'signup'; payload: { email: string; password: string } } | null>(null)
-const uploadedAttachment = ref<{ id: string; name: string } | null>(null)
+const uploadedAttachment = ref<{ id: string; name: string; ingestJobId?: string | null; deduplicated?: boolean } | null>(null)
+const attachmentUploadInfo = ref('')
 const chatFilters = ref<{ mode: 'none' | 'folders' | 'files'; folderIds: string[]; fileIds: string[] }>({
   mode: 'none',
   folderIds: [],
@@ -94,20 +96,8 @@ const pushAssistantMessage = (response: QueryResponse) => {
   })
 }
 
-const parseError = (error: unknown): string => {
-  if (error && typeof error === 'object' && 'data' in error) {
-    const e = error as { data?: { detail?: string } }
-    if (e.data?.detail) {
-      return e.data.detail
-    }
-  }
-
-  if (error instanceof Error) {
-    return error.message
-  }
-
-  return 'Request failed'
-}
+const formatError = (prefix: string, error: unknown): string =>
+  formatRateAndQuotaError(parseApiError(error), prefix)
 
 const loadHistory = async () => {
   if (!isAuthenticated.value) {
@@ -120,7 +110,7 @@ const loadHistory = async () => {
     const result = await getHistory()
     history.value = result.data ?? []
   } catch (error) {
-    errorText.value = `${t('historyError')}: ${parseError(error)}`
+    errorText.value = formatError(t('historyError'), error)
     retryAction.value = 'history'
   } finally {
     historyBusy.value = false
@@ -173,7 +163,7 @@ const handleAsk = async (payload: AskPayload) => {
       await loadHistory()
     }
   } catch (error) {
-    errorText.value = `${t('errorPrefix')}: ${parseError(error)}`
+    errorText.value = formatError(t('errorPrefix'), error)
     retryAction.value = 'ask'
     messages.value.push({
       id: nextMessageId(),
@@ -201,7 +191,7 @@ const handleSignIn = async (payload: { email: string; password: string }) => {
     await loadHistory()
     isAuthModalOpen.value = false
   } catch (error) {
-    errorText.value = `${t('signInError')}: ${parseError(error)}`
+    errorText.value = formatError(t('signInError'), error)
     retryAction.value = 'signin'
   } finally {
     authBusy.value = false
@@ -225,7 +215,7 @@ const handleSignUp = async (payload: { email: string; password: string }) => {
     errorText.value = t('signUpDone')
     retryAction.value = null
   } catch (error) {
-    errorText.value = `${t('signUpError')}: ${parseError(error)}`
+    errorText.value = formatError(t('signUpError'), error)
     retryAction.value = 'signup'
   } finally {
     authBusy.value = false
@@ -260,14 +250,24 @@ const handleAttachmentUpload = async (file: File) => {
 
   attachmentUploadBusy.value = true
   clearError()
+  attachmentUploadInfo.value = ''
   try {
     const uploaded = await uploadFile(file)
     uploadedAttachment.value = {
       id: uploaded.file_id,
       name: uploaded.filename,
+      ingestJobId: uploaded.ingest_job_id ?? null,
+      deduplicated: Boolean(uploaded.deduplicated),
+    }
+    if (uploaded.deduplicated) {
+      attachmentUploadInfo.value = t('uploadDeduplicated')
+    } else if (uploaded.ingest_job_id) {
+      attachmentUploadInfo.value = `${t('uploadIngestJob')}: ${uploaded.ingest_job_id}`
+    } else {
+      attachmentUploadInfo.value = ''
     }
   } catch (error) {
-    errorText.value = `${t('errorPrefix')}: ${parseError(error)}`
+    errorText.value = formatError(t('errorPrefix'), error)
     retryAction.value = null
   } finally {
     attachmentUploadBusy.value = false
@@ -276,12 +276,14 @@ const handleAttachmentUpload = async (file: File) => {
 
 const clearUploadedAttachment = () => {
   uploadedAttachment.value = null
+  attachmentUploadInfo.value = ''
 }
 
 const handleKbFiltersChange = (payload: { mode: 'none' | 'folders' | 'files'; folderIds: string[]; fileIds: string[] }) => {
   if (chatFilters.value.mode !== payload.mode) {
     // Switching retrieval mode resets attachment-id based retrieval to avoid mixed filters.
     uploadedAttachment.value = null
+    attachmentUploadInfo.value = ''
   }
   chatFilters.value = payload
 }
@@ -291,6 +293,7 @@ const setChatFilterMode = (mode: 'none' | 'folders' | 'files') => {
     return
   }
   uploadedAttachment.value = null
+  attachmentUploadInfo.value = ''
   chatFilters.value = { mode, folderIds: [], fileIds: [] }
 }
 
@@ -347,7 +350,7 @@ const handleDeleteHistory = async (id: number) => {
       selectedHistoryId.value = null
     }
   } catch (error) {
-    errorText.value = `${t('deleteError')}: ${parseError(error)}`
+    errorText.value = formatError(t('deleteError'), error)
     retryAction.value = 'delete'
   } finally {
     historyBusy.value = false
@@ -506,6 +509,10 @@ onBeforeUnmount(() => {
           />
         </div>
 
+        <BaseAlert v-if="attachmentUploadInfo" tone="info" role="status">
+          {{ attachmentUploadInfo }}
+        </BaseAlert>
+
         <BaseAlert v-if="errorText" tone="danger" role="alert" aria-live="polite">
           <div class="flex items-start justify-between gap-3">
             <p class="leading-relaxed">{{ errorText }}</p>
@@ -523,7 +530,10 @@ onBeforeUnmount(() => {
     </section>
 
     <aside class="order-3 lg:sticky lg:top-6 lg:self-start">
-      <KnowledgeBasePanel :active-mode="chatFilters.mode" @filters-change="handleKbFiltersChange" />
+      <div class="space-y-4">
+        <KnowledgeBasePanel :active-mode="chatFilters.mode" @filters-change="handleKbFiltersChange" />
+        <IngestAdminPanel />
+      </div>
     </aside>
   </div>
 

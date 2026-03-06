@@ -48,7 +48,9 @@ Frontend использует API backend через `runtimeConfig.public.apiBa
 Создайте `frontend/.env`:
 
 ```env
-NUXT_PUBLIC_API_BASE=http://localhost:8000
+NUXT_PUBLIC_API_BASE=http://localhost:18000
+# optional fallback (also supported):
+# VITE_API_URL=http://localhost:18000
 ```
 
 Если переменная не задана, используется значение по умолчанию: `http://localhost:8000`.
