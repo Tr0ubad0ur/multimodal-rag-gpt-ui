@@ -1,12 +1,20 @@
 <script setup lang="ts">
-import type { HistoryItem, QueryRequest, QueryResponse, RetrievedDoc } from '~/types/api'
+import type { HistoryItem, QueryRequest, QueryResponse, RetrievedDoc, SourceModality, UsedSource } from '~/types/api'
 import { formatRateAndQuotaError, parseApiError } from '~/composables/useApiError'
+
+interface MessageSource {
+  fileId: string
+  modality: SourceModality
+  score: number | null
+  previewRef: string | null
+  source: string
+}
 
 interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
-  docs?: RetrievedDoc[]
+  sources?: MessageSource[]
 }
 
 interface AskPayload {
@@ -87,12 +95,72 @@ const scrollMessagesToBottom = async () => {
   }
 }
 
+const normalizeUsedSource = (item: UsedSource): MessageSource | null => {
+  const fileId = typeof item.file_id === 'string' && item.file_id.trim() ? item.file_id : ''
+  const modality = item.modality === 'image' || item.modality === 'video' ? item.modality : 'text'
+  const score = typeof item.score === 'number' && Number.isFinite(item.score) ? item.score : null
+  const previewRef = typeof item.preview_ref === 'string' && item.preview_ref.trim() ? item.preview_ref : null
+  const source = typeof item.source === 'string' && item.source.trim() ? item.source : 'unknown'
+
+  if (!fileId && !previewRef && source === 'unknown') {
+    return null
+  }
+
+  return {
+    fileId: fileId || 'n/a',
+    modality,
+    score,
+    previewRef,
+    source,
+  }
+}
+
+const normalizeRetrievedDoc = (doc: RetrievedDoc, index: number): MessageSource => {
+  const payload = doc.payload && typeof doc.payload === 'object' ? doc.payload : {}
+  const fileIdCandidate = payload.file_id ?? payload.fileId ?? doc.id
+  const sourceCandidate = payload.source ?? payload.filename ?? payload.title ?? doc.text ?? doc.content
+
+  return {
+    fileId:
+      typeof fileIdCandidate === 'string'
+        ? fileIdCandidate
+        : typeof fileIdCandidate === 'number'
+          ? String(fileIdCandidate)
+          : `legacy-${index + 1}`,
+    modality: 'text',
+    score: typeof doc.score === 'number' && Number.isFinite(doc.score) ? doc.score : null,
+    previewRef: null,
+    source:
+      typeof sourceCandidate === 'string' && sourceCandidate.trim()
+        ? sourceCandidate
+        : JSON.stringify(payload || doc),
+  }
+}
+
+const normalizeSources = (payload: { used_sources?: UsedSource[] | null; retrieved_docs?: RetrievedDoc[] | null }): MessageSource[] | undefined => {
+  if (Array.isArray(payload.used_sources) && payload.used_sources.length) {
+    const normalized = payload.used_sources
+      .map((item) => normalizeUsedSource(item))
+      .filter((item): item is MessageSource => Boolean(item))
+
+    if (normalized.length) {
+      return normalized
+    }
+  }
+
+  if (Array.isArray(payload.retrieved_docs) && payload.retrieved_docs.length) {
+    return payload.retrieved_docs.map((doc, index) => normalizeRetrievedDoc(doc, index))
+  }
+
+  return undefined
+}
+
 const pushAssistantMessage = (response: QueryResponse) => {
   messages.value.push({
     id: nextMessageId(),
     role: 'assistant',
     content: response.answer || 'Ответ не получен.',
-    docs: response.retrieved_docs ?? undefined,
+    sources: normalizeSources(response),
   })
 }
 
@@ -369,7 +437,7 @@ const selectHistory = (item: HistoryItem) => {
       id: nextMessageId(),
       role: 'assistant',
       content: item.answer,
-      docs: item.retrieved_docs ?? undefined,
+      sources: normalizeSources(item),
     }
   )
   void scrollMessagesToBottom()
@@ -481,7 +549,7 @@ onBeforeUnmount(() => {
               :key="message.id"
               :role="message.role"
               :content="message.content"
-              :docs="message.docs"
+              :sources="message.sources"
             />
 
             <article v-if="chatBusy" class="mr-auto max-w-4xl rounded-2xl border border-line bg-surface p-4 shadow-sm ui-pulse">

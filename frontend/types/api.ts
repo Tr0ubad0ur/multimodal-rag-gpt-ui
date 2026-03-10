@@ -42,8 +42,20 @@ export interface RetrievedDoc {
   [key: string]: unknown
 }
 
+export type SourceModality = 'text' | 'image' | 'video'
+
+export interface UsedSource {
+  file_id?: string | null
+  modality?: SourceModality | null
+  score?: number | null
+  preview_ref?: string | null
+  source?: string | null
+  [key: string]: unknown
+}
+
 export interface QueryResponse {
   answer: string
+  used_sources?: UsedSource[] | null
   retrieved_docs?: RetrievedDoc[] | null
   [key: string]: unknown
 }
@@ -73,6 +85,7 @@ export interface HistoryItem {
   user_id: string
   query: string
   answer: string
+  used_sources?: UsedSource[] | null
   retrieved_docs: RetrievedDoc[] | null
   created_at: string
   [key: string]: unknown
