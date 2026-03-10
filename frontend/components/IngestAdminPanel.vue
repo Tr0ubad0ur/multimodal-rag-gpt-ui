@@ -56,7 +56,7 @@ const reindexUserId = ref('')
 const reindexLimit = ref(100)
 const reindexOnlyMissing = ref(false)
 
-const formatError = (error: unknown): string => formatRateAndQuotaError(parseApiError(error), t('errorPrefix'))
+const formatError = (error: unknown): string => formatRateAndQuotaError(parseApiError(error), t('errorPrefix'), t)
 
 const parseMetricLabels = (raw: string): Record<string, string> => {
   if (!raw) {

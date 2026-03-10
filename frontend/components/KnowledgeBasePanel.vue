@@ -40,6 +40,11 @@ interface FileProcessingState {
   latestFailedJobId: string | null
 }
 
+interface TrackedIngestJob {
+  fileId: string
+  jobId: string
+}
+
 const ROOT_FOLDER_ID = 'root'
 
 const { t } = useI18n()
@@ -55,6 +60,7 @@ const {
   uploadFile,
   uploadFolderFiles,
   getFileProcessing,
+  getIngestJob,
   reindexFile,
   retryIngestJob,
 } = useApi()
@@ -99,6 +105,7 @@ const uploadInfoText = ref('')
 const processingByFileId = ref<Record<string, FileProcessingState>>({})
 const processingBusy = ref(false)
 let processingPollTimer: ReturnType<typeof setInterval> | null = null
+const trackedIngestJobs = ref<Record<string, TrackedIngestJob>>({})
 
 const getEntryFromItem = (item: DataTransferItem): FileSystemEntry | null => {
   return (item as DataTransferItem & { webkitGetAsEntry?: () => FileSystemEntry | null }).webkitGetAsEntry?.() ?? null
@@ -427,7 +434,7 @@ const parseFilesList = (payload: unknown, fallbackFolderId: string): KnowledgeFi
     .filter((item): item is KnowledgeFile => Boolean(item))
 }
 
-const formatError = (error: unknown): string => formatRateAndQuotaError(parseApiError(error), t('errorPrefix'))
+const formatError = (error: unknown): string => formatRateAndQuotaError(parseApiError(error), t('errorPrefix'), t)
 
 const getProcessingLabel = (status: FileProcessingStatus): string => {
   switch (status) {
@@ -486,6 +493,57 @@ const refreshFileProcessing = async (fileId: string) => {
   }
 }
 
+const clearTrackedIngestJob = (fileId: string) => {
+  delete trackedIngestJobs.value[fileId]
+}
+
+const applyTrackedJobState = (fileId: string, jobId: string, status: FileProcessingStatus, error: string | null) => {
+  processingByFileId.value[fileId] = {
+    status,
+    latestJobId: jobId,
+    latestError: error,
+    latestFailedJobId: status === 'failed' ? jobId : null,
+  }
+}
+
+const trackIngestJob = (fileId: string, jobId: string) => {
+  trackedIngestJobs.value[fileId] = { fileId, jobId }
+  applyTrackedJobState(fileId, jobId, 'queued', null)
+}
+
+const refreshTrackedIngestJobs = async () => {
+  const tracked = Object.values(trackedIngestJobs.value)
+  if (!isAuthenticated.value || !tracked.length) {
+    return
+  }
+
+  await Promise.all(
+    tracked.map(async ({ fileId, jobId }) => {
+      try {
+        const payload = await getIngestJob(jobId)
+        const job = payload.job
+        if (!job) {
+          await refreshFileProcessing(fileId)
+          clearTrackedIngestJob(fileId)
+          return
+        }
+
+        const status = job.status ?? 'queued'
+        const error = typeof job.error === 'string' ? job.error : null
+        applyTrackedJobState(fileId, job.id, status, error)
+
+        if (status === 'completed' || status === 'failed') {
+          await refreshFileProcessing(fileId)
+          clearTrackedIngestJob(fileId)
+        }
+      } catch {
+        await refreshFileProcessing(fileId)
+        clearTrackedIngestJob(fileId)
+      }
+    })
+  )
+}
+
 const refreshVisibleFileProcessing = async () => {
   if (!isAuthenticated.value || !selectedFolderFiles.value.length) {
     processingByFileId.value = {}
@@ -503,6 +561,7 @@ const refreshVisibleFileProcessing = async () => {
 }
 
 const hasRunningProcessing = computed(() =>
+  Object.keys(trackedIngestJobs.value).length > 0 ||
   selectedFolderFiles.value.some((file) => {
     const state = getFileProcessingState(file.id)
     return state.status === 'queued' || state.status === 'processing'
@@ -697,6 +756,7 @@ const addFilesToSelectedFolder = async (incomingFiles: FileList | null) => {
         uploadNotes.push(`${uploaded.filename}: ${t('uploadDeduplicated')}`)
       } else if (uploaded.ingest_job_id) {
         uploadNotes.push(`${uploaded.filename}: ${t('uploadIngestJob')} ${uploaded.ingest_job_id}`)
+        trackIngestJob(uploaded.file_id, uploaded.ingest_job_id)
       }
       await linkKbFile(
         folderId
@@ -811,6 +871,11 @@ const onDrop = (event: DragEvent) => {
         }
         uploadInfoText.value = parts.join(' · ')
       }
+      for (const item of result.uploaded ?? []) {
+        if (item.ingest_job_id) {
+          trackIngestJob(item.file_id, item.ingest_job_id)
+        }
+      }
       await loadTree()
       await loadFilesForFolder(selectedFolderId.value)
     } catch (error) {
@@ -857,8 +922,12 @@ const reindexKbFile = async (fileId: string) => {
   actionBusy.value = true
   errorText.value = ''
   try {
-    await reindexFile(fileId)
+    const result = await reindexFile(fileId)
     uploadInfoText.value = t('reindexScheduled')
+    const jobIdCandidate = Array.isArray(result.jobs) ? result.jobs[0]?.id : null
+    if (typeof jobIdCandidate === 'string' && jobIdCandidate) {
+      trackIngestJob(fileId, jobIdCandidate)
+    }
     await refreshFileProcessing(fileId)
   } catch (error) {
     errorText.value = formatError(error)
@@ -880,8 +949,11 @@ const retryFailedJob = async (fileId: string) => {
   actionBusy.value = true
   errorText.value = ''
   try {
-    await retryIngestJob(state.latestFailedJobId)
+    const result = await retryIngestJob(state.latestFailedJobId)
     uploadInfoText.value = t('retryScheduled')
+    if (typeof result.job?.id === 'string' && result.job.id) {
+      trackIngestJob(fileId, result.job.id)
+    }
     await refreshFileProcessing(fileId)
   } catch (error) {
     errorText.value = formatError(error)
@@ -1125,7 +1197,7 @@ const startProcessingPolling = () => {
     if (!isAuthenticated.value || !hasRunningProcessing.value) {
       return
     }
-    void refreshVisibleFileProcessing()
+    void Promise.all([refreshTrackedIngestJobs(), refreshVisibleFileProcessing()])
   }, 8000)
 }
 
@@ -1134,6 +1206,7 @@ watch(isAuthenticated, async (value) => {
     folders.value = []
     filesByFolder.value = { [ROOT_FOLDER_ID]: [] }
     processingByFileId.value = {}
+    trackedIngestJobs.value = {}
     uploadInfoText.value = ''
     selectedFolderId.value = ROOT_FOLDER_ID
     selectedFolderFilterIds.value = []

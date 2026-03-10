@@ -8,6 +8,7 @@ import type {
   HistoryResponse,
   IngestDlqItem,
   IngestJob,
+  IngestJobResponse,
   IngestJobStatus,
   ImageEmbeddingRequest,
   KbFile,
@@ -310,6 +311,11 @@ export const useApi = () => {
       auth: true,
     })
 
+  const getIngestJob = (jobId: string) =>
+    apiFetch<IngestJobResponse>(`/ingest/jobs/${jobId}`, {
+      auth: true,
+    })
+
   const listIngestDlq = (params?: { limit?: number }) =>
     apiFetch<{ data: IngestDlqItem[] }>('/ingest/dlq', {
       auth: true,
@@ -408,6 +414,7 @@ export const useApi = () => {
     getFileProcessing,
     reindexFile,
     listIngestJobs,
+    getIngestJob,
     retryIngestJob,
     listIngestDlq,
     requeueIngestDlqItem,

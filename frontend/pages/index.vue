@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { HistoryItem, QueryRequest, QueryResponse, RetrievedDoc, SourceModality, UsedSource } from '~/types/api'
+import type { FileProcessingStatus, HistoryItem, QueryRequest, QueryResponse, RetrievedDoc, SourceModality, UsedSource } from '~/types/api'
 import { formatRateAndQuotaError, parseApiError } from '~/composables/useApiError'
 
 interface MessageSource {
@@ -25,7 +25,18 @@ interface AskPayload {
   attachment?: File
 }
 
+interface UploadedAttachmentState {
+  id: string
+  name: string
+  ingestJobId: string | null
+  deduplicated: boolean
+  status: FileProcessingStatus | null
+  latestError: string | null
+}
+
 type RetryAction = 'ask' | 'history' | 'signin' | 'signup' | 'delete' | null
+
+const ATTACHMENT_STORAGE_KEY = 'mmrag-chat-attachment'
 
 const {
   signIn,
@@ -34,6 +45,8 @@ const {
   askPublic,
   askAuth,
   uploadFile,
+  getFileProcessing,
+  getIngestJob,
   getModels,
   getHistory,
   deleteHistory,
@@ -68,7 +81,7 @@ const retryAction = ref<RetryAction>(null)
 const lastAskPayload = ref<AskPayload | null>(null)
 const lastDeleteId = ref<number | null>(null)
 const lastAuthPayload = ref<{ mode: 'signin' | 'signup'; payload: { email: string; password: string } } | null>(null)
-const uploadedAttachment = ref<{ id: string; name: string; ingestJobId?: string | null; deduplicated?: boolean } | null>(null)
+const uploadedAttachment = ref<UploadedAttachmentState | null>(null)
 const attachmentUploadInfo = ref('')
 const chatFilters = ref<{ mode: 'none' | 'folders' | 'files'; folderIds: string[]; fileIds: string[] }>({
   mode: 'none',
@@ -82,16 +95,181 @@ const selectedFileCount = computed(() => chatFilters.value.fileIds.length)
 const userEmail = computed(() => user.value?.email ?? '')
 const hasUserMessages = computed(() => messages.value.some((message) => message.role === 'user'))
 const canRetry = computed(() => retryAction.value !== null)
+let attachmentPollTimer: ReturnType<typeof setInterval> | null = null
 
 const clearError = () => {
   errorText.value = ''
   retryAction.value = null
 }
 
+const getProcessingLabel = (status: FileProcessingStatus | null): string => {
+  switch (status) {
+    case 'queued':
+      return t('processingQueued')
+    case 'processing':
+      return t('processingInProgress')
+    case 'completed':
+      return t('processingCompleted')
+    case 'failed':
+      return t('processingFailed')
+    case 'not_indexed':
+      return t('processingNotIndexed')
+    default:
+      return ''
+  }
+}
+
 const scrollMessagesToBottom = async () => {
   await nextTick()
   if (chatScrollEl.value) {
     chatScrollEl.value.scrollTop = chatScrollEl.value.scrollHeight
+  }
+}
+
+const persistUploadedAttachment = () => {
+  if (!import.meta.client) {
+    return
+  }
+
+  if (!uploadedAttachment.value || !isAuthenticated.value) {
+    localStorage.removeItem(ATTACHMENT_STORAGE_KEY)
+    return
+  }
+
+  localStorage.setItem(ATTACHMENT_STORAGE_KEY, JSON.stringify(uploadedAttachment.value))
+}
+
+const updateAttachmentUploadInfo = () => {
+  const attachment = uploadedAttachment.value
+  if (!attachment) {
+    attachmentUploadInfo.value = ''
+    return
+  }
+
+  const parts: string[] = []
+  if (attachment.deduplicated) {
+    parts.push(t('uploadDeduplicated'))
+  }
+  if (attachment.ingestJobId) {
+    parts.push(`${t('uploadIngestJob')}: ${attachment.ingestJobId}`)
+  }
+  if (attachment.status) {
+    parts.push(getProcessingLabel(attachment.status))
+  }
+  if (attachment.latestError) {
+    parts.push(attachment.latestError)
+  }
+
+  attachmentUploadInfo.value = parts.join(' · ')
+}
+
+const setUploadedAttachment = (next: UploadedAttachmentState | null) => {
+  uploadedAttachment.value = next
+  persistUploadedAttachment()
+  updateAttachmentUploadInfo()
+}
+
+const stopAttachmentPolling = () => {
+  if (attachmentPollTimer) {
+    clearInterval(attachmentPollTimer)
+    attachmentPollTimer = null
+  }
+}
+
+const shouldPollAttachment = () => {
+  const attachment = uploadedAttachment.value
+  return Boolean(
+    isAuthenticated.value &&
+    attachment &&
+    attachment.ingestJobId &&
+    (attachment.status === null || attachment.status === 'queued' || attachment.status === 'processing')
+  )
+}
+
+const refreshUploadedAttachmentProcessing = async () => {
+  const attachment = uploadedAttachment.value
+  if (!isAuthenticated.value || !attachment) {
+    return
+  }
+
+  const payload = await getFileProcessing(attachment.id)
+  const latest = Array.isArray(payload.jobs) ? payload.jobs[0] : null
+  setUploadedAttachment({
+    ...attachment,
+    status: payload.status ?? 'not_indexed',
+    ingestJobId: latest?.id ?? attachment.ingestJobId,
+    latestError: typeof latest?.error === 'string' ? latest.error : null,
+  })
+}
+
+const refreshUploadedAttachmentJob = async () => {
+  const attachment = uploadedAttachment.value
+  if (!isAuthenticated.value || !attachment?.ingestJobId) {
+    return
+  }
+
+  const payload = await getIngestJob(attachment.ingestJobId)
+  const job = payload.job
+  if (!job) {
+    await refreshUploadedAttachmentProcessing()
+    return
+  }
+
+  setUploadedAttachment({
+    ...attachment,
+    ingestJobId: job.id,
+    status: job.status,
+    latestError: typeof job.error === 'string' ? job.error : null,
+  })
+
+  if (job.status === 'completed' || job.status === 'failed') {
+    await refreshUploadedAttachmentProcessing()
+  }
+}
+
+const startAttachmentPolling = () => {
+  stopAttachmentPolling()
+  attachmentPollTimer = setInterval(() => {
+    if (!shouldPollAttachment()) {
+      stopAttachmentPolling()
+      return
+    }
+    void refreshUploadedAttachmentJob()
+  }, 8000)
+}
+
+const restoreUploadedAttachment = async () => {
+  if (!import.meta.client || !isAuthenticated.value) {
+    return
+  }
+
+  const raw = localStorage.getItem(ATTACHMENT_STORAGE_KEY)
+  if (!raw) {
+    return
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as UploadedAttachmentState
+    if (typeof parsed?.id !== 'string' || typeof parsed?.name !== 'string') {
+      localStorage.removeItem(ATTACHMENT_STORAGE_KEY)
+      return
+    }
+
+    setUploadedAttachment({
+      id: parsed.id,
+      name: parsed.name,
+      ingestJobId: typeof parsed.ingestJobId === 'string' ? parsed.ingestJobId : null,
+      deduplicated: Boolean(parsed.deduplicated),
+      status: parsed.status ?? null,
+      latestError: typeof parsed.latestError === 'string' ? parsed.latestError : null,
+    })
+
+    await refreshUploadedAttachmentProcessing()
+    if (shouldPollAttachment()) {
+      startAttachmentPolling()
+    }
+  } catch {
+    localStorage.removeItem(ATTACHMENT_STORAGE_KEY)
   }
 }
 
@@ -165,7 +343,7 @@ const pushAssistantMessage = (response: QueryResponse) => {
 }
 
 const formatError = (prefix: string, error: unknown): string =>
-  formatRateAndQuotaError(parseApiError(error), prefix)
+  formatRateAndQuotaError(parseApiError(error), prefix, t)
 
 const loadHistory = async () => {
   if (!isAuthenticated.value) {
@@ -303,7 +481,8 @@ const handleLogout = async () => {
     clearAuth()
     history.value = []
     availableModels.value = []
-    uploadedAttachment.value = null
+    stopAttachmentPolling()
+    setUploadedAttachment(null)
     chatFilters.value = { mode: 'none', folderIds: [], fileIds: [] }
     authBusy.value = false
   }
@@ -311,28 +490,25 @@ const handleLogout = async () => {
 
 const handleAttachmentUpload = async (file: File) => {
   if (!isAuthenticated.value) {
-    errorText.value = `${t('errorPrefix')}: Необходимо войти, чтобы загрузить файл через скрепку.`
-    retryAction.value = null
     return
   }
 
   attachmentUploadBusy.value = true
   clearError()
-  attachmentUploadInfo.value = ''
+  stopAttachmentPolling()
+  setUploadedAttachment(null)
   try {
     const uploaded = await uploadFile(file)
-    uploadedAttachment.value = {
+    setUploadedAttachment({
       id: uploaded.file_id,
       name: uploaded.filename,
       ingestJobId: uploaded.ingest_job_id ?? null,
       deduplicated: Boolean(uploaded.deduplicated),
-    }
-    if (uploaded.deduplicated) {
-      attachmentUploadInfo.value = t('uploadDeduplicated')
-    } else if (uploaded.ingest_job_id) {
-      attachmentUploadInfo.value = `${t('uploadIngestJob')}: ${uploaded.ingest_job_id}`
-    } else {
-      attachmentUploadInfo.value = ''
+      status: uploaded.ingest_job_id ? 'queued' : null,
+      latestError: null,
+    })
+    if (uploaded.ingest_job_id) {
+      startAttachmentPolling()
     }
   } catch (error) {
     errorText.value = formatError(t('errorPrefix'), error)
@@ -343,15 +519,14 @@ const handleAttachmentUpload = async (file: File) => {
 }
 
 const clearUploadedAttachment = () => {
-  uploadedAttachment.value = null
-  attachmentUploadInfo.value = ''
+  stopAttachmentPolling()
+  setUploadedAttachment(null)
 }
 
 const handleKbFiltersChange = (payload: { mode: 'none' | 'folders' | 'files'; folderIds: string[]; fileIds: string[] }) => {
   if (chatFilters.value.mode !== payload.mode) {
     // Switching retrieval mode resets attachment-id based retrieval to avoid mixed filters.
-    uploadedAttachment.value = null
-    attachmentUploadInfo.value = ''
+    clearUploadedAttachment()
   }
   chatFilters.value = payload
 }
@@ -360,8 +535,7 @@ const setChatFilterMode = (mode: 'none' | 'folders' | 'files') => {
   if (chatFilters.value.mode === mode) {
     return
   }
-  uploadedAttachment.value = null
-  attachmentUploadInfo.value = ''
+  clearUploadedAttachment()
   chatFilters.value = { mode, folderIds: [], fileIds: [] }
 }
 
@@ -402,8 +576,14 @@ const loadModels = async () => {
 watch(isAuthenticated, async (value) => {
   if (value) {
     await loadModels()
+    await restoreUploadedAttachment()
+    if (shouldPollAttachment()) {
+      startAttachmentPolling()
+    }
     return
   }
+  stopAttachmentPolling()
+  setUploadedAttachment(null)
   availableModels.value = []
 })
 
@@ -508,6 +688,10 @@ onMounted(async () => {
 
     const currentUser = await me()
     setAuth(session.value, currentUser)
+    await restoreUploadedAttachment()
+    if (shouldPollAttachment()) {
+      startAttachmentPolling()
+    }
     await loadHistory()
   } catch {
     clearAuth()
@@ -519,6 +703,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onEscape)
+  stopAttachmentPolling()
 })
 </script>
 
@@ -562,6 +747,7 @@ onBeforeUnmount(() => {
         <div>
           <ChatComposer
             :busy="chatBusy"
+            :authenticated="isAuthenticated"
             :uploading-attachment="attachmentUploadBusy"
             :uploaded-attachment-id="uploadedAttachment?.id"
             :uploaded-attachment-name="uploadedAttachment?.name"
@@ -597,7 +783,7 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <aside class="order-3 lg:sticky lg:top-6 lg:self-start">
+    <aside v-if="isAuthenticated" class="order-3 lg:sticky lg:top-6 lg:self-start">
       <div class="space-y-4">
         <KnowledgeBasePanel :active-mode="chatFilters.mode" @filters-change="handleKbFiltersChange" />
       </div>

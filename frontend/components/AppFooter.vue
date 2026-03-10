@@ -13,7 +13,7 @@ const { t } = useI18n()
       </div>
       <div class="flex flex-col items-start gap-2">
         <div class="grid gap-2 px-3 py-1 text-xs font-medium text-brand-strong">
-          <a href="http://127.0.0.1:8000/docs" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ t('apiLabel') }}</a>
+          <a href="http://127.0.0.1:18000/docs" target="_blank" rel="noopener noreferrer" class="hover:underline">{{ t('apiLabel') }}</a>
           <a href="http://localhost:6333/dashboard#/collections" target="_blank" rel="noopener noreferrer" class="hover:underline">Qdrant</a>
           <a href="http://127.0.0.1:54323/project/default" target="_blank" rel="noopener noreferrer" class="hover:underline">Supabase</a>
           <a href="http://localhost:9090" target="_blank" rel="noopener noreferrer" class="hover:underline">Prometheus</a>

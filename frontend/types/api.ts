@@ -57,6 +57,7 @@ export interface QueryResponse {
   answer: string
   used_sources?: UsedSource[] | null
   retrieved_docs?: RetrievedDoc[] | null
+  guest_session_id?: string | null
   [key: string]: unknown
 }
 
@@ -111,7 +112,7 @@ export type FileProcessingStatus = IngestJobStatus | 'not_indexed'
 export interface IngestJob {
   id: string
   user_id?: string | null
-  file_id: string
+  file_id?: string
   status: IngestJobStatus
   attempt?: number
   error?: string | null
@@ -126,6 +127,10 @@ export interface FileProcessingResponse {
   file_id: string
   status: FileProcessingStatus
   jobs: IngestJob[]
+}
+
+export interface IngestJobResponse {
+  job: IngestJob | null
 }
 
 export interface IngestDlqItem {

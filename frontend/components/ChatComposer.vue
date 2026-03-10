@@ -16,6 +16,7 @@ interface ModelOption {
 
 const props = defineProps<{
   busy?: boolean
+  authenticated?: boolean
   uploadingAttachment?: boolean
   uploadedAttachmentId?: string | null
   uploadedAttachmentName?: string | null
@@ -107,8 +108,13 @@ const onFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
   if (file) {
-    directAttachment.value = null
-    emit('uploadAttachment', file)
+    if (props.authenticated) {
+      directAttachment.value = null
+      emit('uploadAttachment', file)
+    } else {
+      emit('clearUploadedAttachment')
+      directAttachment.value = file
+    }
   }
   target.value = ''
 }
