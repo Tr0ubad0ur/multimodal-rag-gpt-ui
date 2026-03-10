@@ -66,6 +66,10 @@ watch(
       >
         {{ t('logout') }}
       </BaseButton>
+
+      <div class="border-t border-line pt-3">
+        <IngestAdminPanel />
+      </div>
     </div>
 
     <div v-else class="mt-4">

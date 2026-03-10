@@ -600,28 +600,29 @@ onBeforeUnmount(() => {
     <aside class="order-3 lg:sticky lg:top-6 lg:self-start">
       <div class="space-y-4">
         <KnowledgeBasePanel :active-mode="chatFilters.mode" @filters-change="handleKbFiltersChange" />
-        <IngestAdminPanel />
       </div>
     </aside>
   </div>
 
   <div
     v-if="isAuthModalOpen"
-    class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-[2px]"
+    class="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/45 p-4 backdrop-blur-[2px]"
     @click="onAuthOverlayClick"
   >
-    <div class="w-full max-w-md">
-      <AuthPanel
-        :busy="authBusy"
-        :authenticated="isAuthenticated"
-        :user-email="userEmail"
-        @signin="handleSignIn"
-        @signup="handleSignUp"
-        @logout="handleLogout"
-      />
-      <BaseButton block class="mt-3" variant="secondary" @click="closeAuthModal">
-        {{ t('close') }}
-      </BaseButton>
+    <div class="w-full max-w-4xl">
+      <div class="max-h-[90vh] overflow-y-auto rounded-3xl">
+        <AuthPanel
+          :busy="authBusy"
+          :authenticated="isAuthenticated"
+          :user-email="userEmail"
+          @signin="handleSignIn"
+          @signup="handleSignUp"
+          @logout="handleLogout"
+        />
+        <BaseButton block class="mt-3" variant="secondary" @click="closeAuthModal">
+          {{ t('close') }}
+        </BaseButton>
+      </div>
     </div>
   </div>
 </template>
